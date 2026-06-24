@@ -1,0 +1,80 @@
+---
+# nginx that ONLY speaks HTTPS — listens on 8443 with the CA-signed
+# cert. We don't run an HTTP port. So if Envoy speaks plaintext to
+# this pod (forgetting BackendTLSPolicy), the connection fails the
+# TLS handshake.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: tls-upstream-demo
+data:
+  nginx.conf: |
+    events {}
+    http {
+      server {
+        listen 8443 ssl;
+        # server_name matches the SAN in our cert AND the SNI Envoy
+        # sends (BackendTLSPolicy.validation.hostname).
+        server_name secure-backend.tls-upstream-demo.svc.cluster.local;
+        ssl_certificate     /etc/nginx/tls/tls.crt;
+        ssl_certificate_key /etc/nginx/tls/tls.key;
+
+        location / {
+          add_header content-type "application/json" always;
+          return 200 '{"msg":"served by HTTPS-only backend","scheme":"https","tls":"verified-by-envoy-via-CA"}\n';
+        }
+      }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secure-backend
+  namespace: tls-upstream-demo
+  labels:
+    app: secure-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: secure-backend
+  template:
+    metadata:
+      labels:
+        app: secure-backend
+    spec:
+      containers:
+        - name: nginx
+          image: docker.io/library/nginx:1.27-alpine
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            - { name: conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: tls,  mountPath: /etc/nginx/tls, readOnly: true }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+      volumes:
+        - name: conf
+          configMap: { name: nginx-config }
+        - name: tls
+          secret:    { secretName: secure-backend-cert }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: secure-backend
+  namespace: tls-upstream-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: secure-backend
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP

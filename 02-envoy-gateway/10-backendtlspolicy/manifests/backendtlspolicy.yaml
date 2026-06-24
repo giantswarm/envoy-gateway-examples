@@ -1,0 +1,39 @@
+---
+# BackendTLSPolicy — tells Envoy to speak TLS when connecting to
+# the referenced backend Service, and how to validate the cert.
+#
+# Without this policy, Envoy would open a plaintext TCP connection
+# to port 8443, attempt to speak HTTP/1.1 to nginx-with-TLS, fail
+# the (non-)handshake, and return 503 upstream_connect_error.
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: secure-backend-tls
+  namespace: tls-upstream-demo
+spec:
+  # targetRefs[] — what we're attaching to. One BTP can target
+  # multiple backends; one backend can have at most one BTP.
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: secure-backend
+      # Optional: limit to a specific sectionName (Service port name).
+      # We have only one port here, so we omit it.
+
+  validation:
+    # Where Envoy gets the trust roots. ConfigMap must have a key
+    # `ca.crt` (PEM-encoded). Use a Secret of type Opaque if you
+    # prefer.
+    caCertificateRefs:
+      - group: ""
+        kind: ConfigMap
+        name: secure-backend-ca
+    # The SNI Envoy sends AND the hostname it expects in the cert
+    # (matched against SAN). Must match the leaf cert's SAN.
+    hostname: secure-backend.tls-upstream-demo.svc.cluster.local
+    # Alternative to caCertificateRefs:
+    #
+    # wellKnownCACertificates: System
+    #
+    # ...which tells Envoy to use the system trust store (good for
+    # publicly-signed certs, e.g. routing to an external API).

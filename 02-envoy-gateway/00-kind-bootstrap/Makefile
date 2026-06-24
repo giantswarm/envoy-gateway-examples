@@ -124,9 +124,15 @@ install-eg:
 	  done ; \
 	fi
 	@echo ">> installing Envoy Gateway $(EG_HELM_VERSION)..."
+	@# Feature-flag opt-ins for later examples (off by default in EG):
+	@#   extensionApis.enableBackend         — Backend CRD (example 09)
+	@#   extensionApis.enableEnvoyPatchPolicy — EnvoyPatchPolicy (example 18)
+	@# Both are no-ops if you don't apply the matching CRs.
 	helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
 	  --version $(EG_HELM_VERSION) \
-	  -n envoy-gateway-system --create-namespace
+	  -n envoy-gateway-system --create-namespace \
+	  --set config.envoyGateway.extensionApis.enableBackend=true \
+	  --set config.envoyGateway.extensionApis.enableEnvoyPatchPolicy=true
 	@echo ">> waiting for envoy-gateway controller to be ready..."
 	kubectl wait --for=condition=Available --timeout=180s \
 	    -n envoy-gateway-system deploy/envoy-gateway

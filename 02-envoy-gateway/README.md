@@ -39,11 +39,11 @@ done with Phase 2: `cd 00-kind-bootstrap && make down`.
 | 06 | [`06-grpcroute`](./06-grpcroute/)                    | `GRPCRoute` with 4 rules (service-level, method-level, catch-all, reflection). `moul/grpcbin` backend. HTTP/2 enabled automatically via `Service.appProtocol`. |
 | 07 | [`07-tcproute-udproute-tlsroute`](./07-tcproute-udproute-tlsroute/) | Three L4 route kinds on one Gateway: TCPRoute → istio tcp-echo, UDPRoute → CoreDNS, TLSRoute (passthrough) → nginx with its own cert. |
 | 08 | [`08-referencegrant`](./08-referencegrant/)          | Cross-namespace cert + backendRef in one Gateway. Live "delete RG → ResolvedRefs flips → recover" demo. |
-| 09 | `09-backend-resource` *(planned)*                     | The `Backend` CRD — non-K8s service backends (FQDN, static IP). |
-| 10 | `10-backendtlspolicy` *(planned)*                     | mTLS to upstream. |
-| 11 | `11-clienttrafficpolicy` *(planned)*                  | Downstream tuning: connection limits, proxy protocol, HTTP/3, client cert auth. |
-| 12 | `12-backendtrafficpolicy` *(planned)*                 | Retries, timeouts, circuit breakers, active HC, LB — maps to Phase 1 04–07. |
-| 13 | `13-securitypolicy-jwt` *(planned)*                   | JWT validation via `SecurityPolicy`. |
+| 09 | [`09-backend-resource`](./09-backend-resource/)      | EG's `Backend` CRD — route to FQDN (external or in-cluster), static IP, or Unix socket. Produces STRICT_DNS / STATIC clusters instead of EDS. |
+| 10 | [`10-backendtlspolicy`](./10-backendtlspolicy/)      | Envoy → backend TLS: `BackendTLSPolicy` with CA in a ConfigMap + SAN-matched hostname validation. Negative test by deleting the policy. |
+| 11 | [`11-clienttrafficpolicy`](./11-clienttrafficpolicy/) | EG `ClientTrafficPolicy` — three observable knobs (XFF trust hops, HTTP/1 header case, path merge-slashes); shows where each lands in the generated HCM config. |
+| 12 | [`12-backendtrafficpolicy`](./12-backendtrafficpolicy/) | EG `BackendTrafficPolicy` — five features at once (retry, timeout, LB, active HC, outlier detection). Behavioral tests for retry + timeout, config_dump proof for the rest. |
+| 13 | [`13-securitypolicy-jwt`](./13-securitypolicy-jwt/)  | `SecurityPolicy.jwt` with `localJWKS.inline`, claim-to-header extraction, and 5 verify scenarios (missing/valid/expired/wrong-aud/wrong-iss). Mirrors Phase 1 ex 12. |
 | 14 | `14-securitypolicy-oidc` *(planned)*                  | OIDC login flow with Dex or Keycloak. |
 | 15 | `15-securitypolicy-basicauth-cors-ipallow` *(planned)*| Smaller `SecurityPolicy` features grouped. |
 | 16 | `16-securitypolicy-extauth` *(planned)*               | External authz; mirrors Phase 1 `13`. |
