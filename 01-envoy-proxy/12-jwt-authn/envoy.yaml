@@ -1,0 +1,123 @@
+# --------------------------------------------------------------------------- #
+# 12 — JWT authentication
+#
+# The envoy.filters.http.jwt_authn filter validates JWTs against a JWKS,
+# checks `iss` / `aud` / `exp`, and optionally forwards the token (or
+# parsed claims) to the upstream as request headers.
+#
+# `providers:` lists who issues acceptable tokens. `rules:` says which
+# routes need which provider.
+#
+# Routes:
+#   /public        — no rule, no JWT required, control
+#   /private       — requires a valid JWT from provider `demo`
+#   /claims        — same auth, plus claim_to_headers + forward_payload
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+
+                  # --------------------------------------------------- #
+                  # jwt_authn filter.
+                  #
+                  # Validates the JWT, attaches the parsed payload to
+                  # request metadata (for downstream filters / authz),
+                  # and optionally forwards it / specific claims as
+                  # headers to the upstream.
+                  # --------------------------------------------------- #
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+
+                      providers:
+                        demo:
+                          issuer: "envoy-demo"
+                          audiences: ["hello"]
+                          # JWKS comes from a file on disk. Alternatives:
+                          # - local_jwks { inline_string: "..." }
+                          # - remote_jwks { http_uri: { uri: "https://idp/.well-known/jwks.json", ... }, cache_duration: 600s }
+                          local_jwks:
+                            filename: /etc/envoy/keys/jwks.json
+                          # Forward the original Authorization header
+                          # untouched to the upstream. Default: stripped.
+                          forward: true
+                          # Also stuff the BASE64-encoded payload into a
+                          # separate header so backends can read claims
+                          # without re-validating.
+                          forward_payload_header: "x-jwt-payload"
+                          # Lift specific claims into clear-text headers.
+                          claim_to_headers:
+                            - header_name: "x-jwt-sub"
+                              claim_name: "sub"
+                            - header_name: "x-jwt-role"
+                              claim_name: "role"
+
+                      rules:
+                        # No rule for /public -> no auth required.
+                        - match: { prefix: "/private" }
+                          requires:
+                            provider_name: demo
+                        - match: { prefix: "/claims" }
+                          requires:
+                            provider_name: demo
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: jwt_demo
+                      domains: ["*"]
+                      routes:
+
+                        - match: { path: "/public" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        - match: { path: "/private" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        # /claims lands on the backend's /echo so we can
+                        # see the headers Envoy injected.
+                        - match: { path: "/claims" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/echo"
+
+  clusters:
+    - name: hello_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: hello, port_value: 8080 } }

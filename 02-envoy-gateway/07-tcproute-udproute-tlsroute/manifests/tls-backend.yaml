@@ -1,0 +1,84 @@
+---
+# nginx serving HTTPS on :8443 with its OWN self-signed cert (mounted
+# from a Secret). Envoy doesn't terminate TLS here — the TLSRoute
+# uses passthrough mode, so the TLS handshake completes between the
+# client and this nginx pod end-to-end.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-tls-config
+  namespace: l4-demo
+data:
+  nginx.conf: |
+    events {}
+    http {
+      server {
+        listen 8443 ssl;
+        server_name tls.local;
+        ssl_certificate     /etc/nginx/tls/tls.crt;
+        ssl_certificate_key /etc/nginx/tls/tls.key;
+        location / {
+          add_header content-type "text/plain" always;
+          return 200 "served by nginx behind TLSRoute passthrough\n";
+        }
+      }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tls-backend
+  namespace: l4-demo
+  labels:
+    app: tls-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tls-backend
+  template:
+    metadata:
+      labels:
+        app: tls-backend
+    spec:
+      containers:
+        - name: nginx
+          image: docker.io/library/nginx:1.27-alpine
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls
+              mountPath: /etc/nginx/tls
+              readOnly: true
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+      volumes:
+        - name: conf
+          configMap:
+            name: nginx-tls-config
+        - name: tls
+          secret:
+            secretName: tls-backend-cert
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tls-backend
+  namespace: l4-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: tls-backend
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP

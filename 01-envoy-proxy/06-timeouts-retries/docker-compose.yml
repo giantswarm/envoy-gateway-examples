@@ -1,0 +1,37 @@
+services:
+  hello-a:
+    build: ../../apps/helloworld
+    environment: { NAME: hello-a }
+    expose: ["8080"]
+
+  hello-b:
+    build: ../../apps/helloworld
+    environment: { NAME: hello-b }
+    expose: ["8080"]
+
+  hello-c:
+    build: ../../apps/helloworld
+    environment: { NAME: hello-c }
+    expose: ["8080"]
+
+  hello-bad:
+    build: ../../apps/helloworld
+    environment:
+      NAME: hello-bad
+      BREAK: "true"
+      BREAK_CODE: "503"
+    expose: ["8080"]
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    depends_on:
+      - hello-a
+      - hello-b
+      - hello-c
+      - hello-bad

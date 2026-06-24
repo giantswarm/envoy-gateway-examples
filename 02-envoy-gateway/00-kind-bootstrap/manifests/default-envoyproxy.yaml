@@ -1,0 +1,27 @@
+---
+# Default EnvoyProxy parameters applied to every Gateway in this
+# cluster (the GatewayClass references this via parametersRef).
+#
+# Why: kind has no LoadBalancer controller. Without this, EG creates
+# the data-plane Service as type: LoadBalancer, EXTERNAL-IP stays
+# <pending>, and the Gateway sits at Programmed=False with
+# reason: AddressNotAssigned — even though the Envoy pod is running
+# fine.
+#
+# Switching to ClusterIP makes the Gateway report Programmed=True;
+# examples reach the data plane via `kubectl port-forward svc/...`.
+#
+# Example 04 covers the EnvoyProxy CR in depth (replicas, resources,
+# logging, image, etc.). This bootstrap file is the bare minimum to
+# make `make up` clean on kind.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: default-envoyproxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP

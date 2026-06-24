@@ -1,0 +1,20 @@
+---
+# TCPRoute is in API group `gateway.networking.k8s.io/v1alpha2` —
+# still experimental upstream. Our 00-kind-bootstrap installs the
+# experimental channel CRDs, so this works as-is.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: tcp-echo
+  namespace: l4-demo
+spec:
+  parentRefs:
+    - name: l4
+      sectionName: tcp                # bind to the `tcp` listener only
+
+  # TCPRoute has NO matches[] — it's L4 forwarding, nothing to match on.
+  # Each rule is just "forward to these backends, optionally weighted".
+  rules:
+    - backendRefs:
+        - name: tcp-echo
+          port: 9000                  # tcp-echo's Service port

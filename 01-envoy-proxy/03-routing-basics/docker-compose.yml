@@ -1,0 +1,19 @@
+services:
+  helloworld:
+    build:
+      context: ../../apps/helloworld
+    environment:
+      NAME: helloworld
+    expose:
+      - "8080"
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    depends_on:
+      - helloworld

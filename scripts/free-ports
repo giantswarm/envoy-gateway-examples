@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Stop any docker compose project that is currently publishing one of the
+# given host ports. Used by example Makefiles so that switching examples is
+# a single `make up` — no manual `make down` of the previous example first.
+#
+# Behaviour:
+#   - Skips our own compose project (by name).
+#   - For each conflicting container, finds its compose project working
+#     directory and runs `docker compose down` there (clean shutdown).
+#   - Falls back to `docker rm -f` if the working dir is gone.
+#   - Leaves non-compose containers alone — prints a hint and continues.
+#
+# Usage: scripts/free-ports PORT [PORT ...]
+#
+# Exits 0 even when nothing was found. Safe to run repeatedly.
+
+set -euo pipefail
+
+if [[ $# -eq 0 ]]; then
+  echo "usage: $(basename "$0") PORT [PORT ...]" >&2
+  exit 2
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker not on PATH; nothing to free." >&2
+  exit 0
+fi
+
+# docker compose derives the default project name from the directory
+# basename, lowercased, with non-alphanumeric chars collapsed/normalised.
+# Replicate the rule here so we recognise ourselves.
+own_project=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | sed 's/^_*//;s/_*$//')
+
+for port in "$@"; do
+  # `docker ps --filter publish=<port>` matches containers publishing the
+  # given host port. -q prints one container ID per line.
+  while IFS= read -r cid; do
+    [[ -z "$cid" ]] && continue
+
+    project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$cid" 2>/dev/null || true)
+    workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$cid" 2>/dev/null || true)
+    cname=$(docker inspect -f '{{ .Name }}' "$cid" 2>/dev/null | sed 's|^/||' || true)
+
+    if [[ -z "$project" ]]; then
+      echo ">> port :$port is held by non-compose container '$cname' — leaving it alone." >&2
+      echo "   run: docker stop $cname    (if you want to free it)" >&2
+      continue
+    fi
+
+    if [[ "$project" == "$own_project" ]]; then
+      # Our own previous run. docker compose up will reuse / recreate it.
+      continue
+    fi
+
+    echo ">> port :$port held by compose project '$project'; stopping it"
+    if [[ -n "$workdir" && -d "$workdir" ]]; then
+      ( cd "$workdir" && docker compose down ) || docker rm -f "$cid" >/dev/null
+    else
+      docker rm -f "$cid" >/dev/null
+    fi
+  done < <(docker ps --filter "publish=$port" -q)
+done

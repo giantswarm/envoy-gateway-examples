@@ -1,0 +1,29 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: envoy-gateway-examples
+
+# Single control-plane node — enough for everything in Phase 2.
+# Add `role: worker` nodes here if a later example needs them.
+nodes:
+  - role: control-plane
+    # Expose host ports 8080 / 8443 onto a NodePort range; subsequent
+    # examples can publish their Gateway data plane via either:
+    #   (a) kubectl port-forward, or
+    #   (b) the EnvoyProxy CR's service type + a kind-mapped NodePort.
+    # We default to port-forward to keep examples simple and portable;
+    # see example 04 (EnvoyProxy CR) for the NodePort variant.
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 30443
+        hostPort: 8443
+        protocol: TCP
+
+# Set kubeadm log level high enough to be useful but not noisy.
+kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"

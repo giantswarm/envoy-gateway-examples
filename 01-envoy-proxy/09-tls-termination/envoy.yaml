@@ -1,0 +1,165 @@
+# --------------------------------------------------------------------------- #
+# 09 — Downstream TLS termination with SNI
+#
+# Two listeners:
+#   :10000  — plaintext HTTP (for comparison)
+#   :10443  — HTTPS with TWO filter chains, one per SNI
+#
+# Two backends, hello-one and hello-two, in two clusters. The SNI
+# selects which filter chain runs, and therefore which cluster the
+# request lands on:
+#
+#   curl https://one.local:10443/  -> filter_chain "one"  -> hello-one
+#   curl https://two.local:10443/  -> filter_chain "two"  -> hello-two
+#
+# Each chain has its own cert (signed by our example CA). filter_chain_match
+# also gates which transport_socket runs, so the cert presented in the
+# TLS handshake depends on the SNI value the client sent.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+
+    # ----- :10000 plaintext (for sanity-checking the backends) ----------- #
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: plain
+                  virtual_hosts:
+                    - name: plain
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: cluster_one }
+
+    # ----- :10443 TLS with SNI-based filter chains ---------------------- #
+    - name: listener_https
+      address: { socket_address: { address: 0.0.0.0, port_value: 10443 } }
+
+      # The tls_inspector listener filter peeks at the TLS ClientHello
+      # to extract the SNI and the ALPN list, *before* a filter chain
+      # is selected. Without it, filter_chain_match { server_names }
+      # never matches because Envoy doesn't know the SNI yet.
+      listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+
+      filter_chains:
+
+        # -------- Chain "one" — SNI=one.local --------------------------- #
+        - filter_chain_match:
+            server_names: ["one.local"]
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                # The HTTP/2 ALPN value `h2` must be first if you want
+                # negotiation to pick HTTP/2 (some HTTP/2 features in HCM
+                # need ALPN to be set). `http/1.1` is the fallback.
+                alpn_protocols: ["h2", "http/1.1"]
+                tls_certificates:
+                  - certificate_chain: { filename: "/etc/envoy/certs/one.local.crt" }
+                    private_key:       { filename: "/etc/envoy/certs/one.local.key" }
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_https_one
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: https_one
+                  virtual_hosts:
+                    - name: one
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: cluster_one
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+        # -------- Chain "two" — SNI=two.local --------------------------- #
+        - filter_chain_match:
+            server_names: ["two.local"]
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                alpn_protocols: ["h2", "http/1.1"]
+                tls_certificates:
+                  - certificate_chain: { filename: "/etc/envoy/certs/two.local.crt" }
+                    private_key:       { filename: "/etc/envoy/certs/two.local.key" }
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_https_two
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: https_two
+                  virtual_hosts:
+                    - name: two
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: cluster_two
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+  clusters:
+    - name: cluster_one
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: cluster_one
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: hello-one, port_value: 8080 } }
+
+    - name: cluster_two
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: cluster_two
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: hello-two, port_value: 8080 } }

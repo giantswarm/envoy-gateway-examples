@@ -1,0 +1,37 @@
+---
+# HTTPRoute attaches to one or more Gateways via parentRefs and tells
+# Envoy what to do with matching requests. Phase 1's envoy.yaml had a
+# `route_config:` with virtual_hosts + routes — this is the same idea,
+# split into its own CR so it can be authored by a different team than
+# the one that owns the Gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: helloworld
+  namespace: demo
+spec:
+  # Which Gateway(s) this route attaches to. Multiple parentRefs are
+  # allowed; this is how one HTTPRoute can be exposed on, say, both an
+  # external and an internal Gateway.
+  parentRefs:
+    - name: eg
+
+  # `hostnames:` filters by :authority. Omit to accept any host. Useful
+  # later for multi-tenant Gateways; we leave it out here so plain
+  # `curl localhost:8080/` works without setting Host.
+
+  rules:
+    - matches:
+        # PathPrefix is the closest equivalent to Envoy's `prefix: /`.
+        # Other types: Exact, RegularExpression. Multiple matches[] in
+        # one rule are OR-ed; multiple `rules[]` produce independent
+        # route table entries.
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        # The backing Service. Envoy Gateway turns each backendRef into
+        # an Envoy Cluster + EDS endpoint list. With multiple
+        # backendRefs you get weighted load balancing.
+        - name: helloworld
+          port: 8080

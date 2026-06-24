@@ -1,0 +1,37 @@
+# Rate-limit policy consumed by envoyproxy/ratelimit. Tree of descriptors:
+# each request from Envoy carries a descriptor (list of key=value pairs),
+# the service walks this tree to find the matching node, and applies that
+# node's rate_limit.
+#
+# An entry with `key` only (no `value`) matches ANY value for that key and
+# each unique value gets its OWN counter. That's the wildcard behaviour
+# local_ratelimit (example 10) lacks.
+
+domain: rl_demo
+
+descriptors:
+
+  # generic_key=default — one shared bucket for the /global route.
+  - key: generic_key
+    value: default
+    rate_limit:
+      unit: second
+      requests_per_unit: 5
+
+  # user=<anything> — per-user bucket. /per-user produces (user=alice),
+  # (user=bob) etc., each tracked separately.
+  - key: user
+    rate_limit:
+      unit: second
+      requests_per_unit: 2
+
+  # Hierarchical example: (user=<anything>, tier=<tier>) — combine with
+  # the /tiered exercise in the README.
+  # - key: user
+  #   descriptors:
+  #     - key: tier
+  #       value: premium
+  #       rate_limit: { unit: second, requests_per_unit: 10 }
+  #     - key: tier
+  #       value: free
+  #       rate_limit: { unit: second, requests_per_unit: 1 }
