@@ -1,0 +1,68 @@
+---
+# EnvoyPatchPolicy — the escape hatch.
+#
+# Apply JSON-Patch operations directly to the Envoy resources EG
+# generates for a Gateway. Use ONLY when no CRD covers what you
+# need. Things you can do here that nothing else gives you:
+#   - tune knobs EG doesn't expose yet
+#   - inject a custom HTTP filter no policy CRD wraps
+#   - override response_headers_to_add at the route_config level
+#   - patch the bootstrap (with type=ClusterPatch — not used here)
+#
+# Caveats:
+#   - You're writing raw Envoy config. Mistakes break the listener
+#     (no traffic) or get rejected at xDS push time.
+#   - You're now coupled to EG's internal resource naming.
+#   - When you upgrade EG, the naming or shape may change and your
+#     patch silently misses or breaks.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyPatchPolicy
+metadata:
+  name: patched
+  namespace: demo
+spec:
+  # EnvoyPatchPolicy attaches to a SINGLE Gateway (note: targetRef
+  # — singular, not targetRefs). The patches apply to all xDS
+  # resources EG generated for that Gateway.
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: patched
+
+  # Patch ordering across multiple EPPs targeting the same Gateway:
+  # lower priority runs first. Defaults to 0.
+  priority: 0
+
+  # We use JSON Patch (RFC 6902). EG also accepts a Merge type for
+  # whole-resource overlays, but JSON Patch is more surgical.
+  type: JSONPatch
+  jsonPatches:
+
+    # -----------------------------------------------------------------
+    # Patch 1 — Listener: bump the per-connection buffer.
+    # -----------------------------------------------------------------
+    # EG names listeners as <namespace>/<gateway>/<listener-name>.
+    # `op: replace` overwrites the field; `add` for new fields;
+    # `remove` for deletion.
+    - type: "type.googleapis.com/envoy.config.listener.v3.Listener"
+      name: demo/patched/http
+      operation:
+        op: replace
+        path: /per_connection_buffer_limit_bytes
+        value: 1048576           # 1 MiB
+
+    # -----------------------------------------------------------------
+    # Patch 2 — RouteConfiguration: stamp every response with a
+    # header so clients can tell the patch landed.
+    # -----------------------------------------------------------------
+    # The JSON-Pointer `/-` means "append to the array".
+    - type: "type.googleapis.com/envoy.config.route.v3.RouteConfiguration"
+      name: demo/patched/http
+      operation:
+        op: add
+        path: /response_headers_to_add/-
+        value:
+          header:
+            key: x-patched-by
+            value: envoy-patch-policy
+          append_action: APPEND_IF_EXISTS_OR_ADD

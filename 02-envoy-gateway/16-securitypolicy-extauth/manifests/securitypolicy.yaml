@@ -1,0 +1,59 @@
+---
+# SecurityPolicy with external authorization.
+#
+# For every request Envoy makes a side-call to the configured authz
+# service. Authz returns:
+#   - 2xx -> allow, optionally with extra headers (which we forward
+#     to the upstream via headersToBackend)
+#   - non-2xx -> deny with that status code
+#
+# Use cases this unlocks (beyond what JWT/OIDC/IP-allow can do):
+#   - custom policy logic in your own language
+#   - lookup against a per-user/per-tenant database
+#   - decision based on the request body (e.g. parse JSON, check fields)
+#   - integration with an OPA / Cerbos / homegrown service
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: extauth-protect
+  namespace: demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: extauth-protect
+
+  extAuth:
+    # http: alternative is `grpc:` for the Envoy ext_authz gRPC API.
+    # HTTP is simpler — any HTTP service works. gRPC is more efficient
+    # for high-RPS gateways.
+    http:
+      backendRefs:
+        - name: authz
+          port: 8000
+      # `path:` is the URI Envoy calls on the authz service. Default
+      # is `/`. The toy authz here serves any path; we leave it
+      # default so the original request path is mirrored (helps the
+      # policy in app.py decide based on /admin, /protected, etc.).
+      # path: /verify
+
+      # Allow-list of headers from the AUTHZ RESPONSE to inject into
+      # the request before forwarding to the BACKEND. The toy authz
+      # returns `x-authz-decision` so the backend can see why it was
+      # allowed.
+      headersToBackend:
+        - x-authz-decision
+
+      # Allow-list of headers from the original client request to
+      # forward to the authz service. Default (when unset) is "all".
+      # We list the ones the toy authz reads.
+      # headersToExtAuth:
+      #   - x-user-id
+      #   - x-user-role
+      #   - authorization
+
+    # When authz is unreachable / errors, do we let the request
+    # through (fail-open) or block it (fail-closed)?
+    # Default is `failOpen: false` (fail-closed) — safer.
+    # We make it explicit here.
+    failOpen: false
