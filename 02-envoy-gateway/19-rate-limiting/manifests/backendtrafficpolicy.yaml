@@ -1,0 +1,72 @@
+---
+# Rate limiting via BackendTrafficPolicy.
+#
+# Two flavors, configured under spec.rateLimit:
+#
+#   type: Local
+#     Per-Envoy-pod token buckets. Limits are NOT aggregated across
+#     replicas — if you have 3 pods, a "10/minute" limit becomes
+#     effectively 30/minute under the worst-case LB distribution.
+#     Pros: no external infra, easiest to deploy.
+#     Cons: imprecise at scale, can't enforce strict cluster-wide
+#     budgets.
+#
+#   type: Global
+#     Sends requests' descriptors to Envoy's external ratelimit
+#     service (envoyproxy/ratelimit, with Redis behind it). Counters
+#     are cluster-wide. Requires the `rateLimit` block in EG's
+#     EnvoyGateway config to point at the service.
+#     Pros: precise, cluster-wide; supports complex descriptors.
+#     Cons: deploy a Redis + ratelimit service; another failure mode.
+#
+# This example uses Local. Phase 1 example 11 covered the Global
+# variant in raw Envoy. The README has a sketch of how the EG
+# config for Global would look.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: ratelimit
+  namespace: demo
+spec:
+  # BTP targets Gateway-API kinds, NOT Service (don't confuse with
+  # BackendTLSPolicy — see ex 10 vs ex 12).
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: ratelimit
+
+  rateLimit:
+    type: Local
+    local:
+      # `rules` is ordered; the first matching `clientSelectors`
+      # wins. A rule with NO clientSelectors is a catch-all and
+      # should be last.
+      rules:
+
+        # ----- "free" tenants — generous demo limit but tight ------
+        - clientSelectors:
+            - headers:
+                - name: x-tenant
+                  value: free                  # exact string match
+          limit:
+            requests: 5
+            unit: Minute
+
+        # ----- "premium" tenants — much higher --------------------
+        - clientSelectors:
+            - headers:
+                - name: x-tenant
+                  value: premium
+          limit:
+            requests: 100
+            unit: Minute
+
+        # ----- catch-all — no selector ----------------------------
+        - limit:
+            requests: 10
+            unit: Minute
+
+      # When a bucket is exhausted Envoy returns 429 with a small
+      # Envoy-generated body. Set `body` here to override the body
+      # text (not used; default is "local_rate_limited").
+      # body: '{"error":"rate limited"}'
