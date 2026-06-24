@@ -1,0 +1,21 @@
+---
+# Trust the LAST hop of any incoming X-Forwarded-For header. This is
+# what makes the SecurityPolicy.authorization.clientCIDRs rules
+# match the IP the client claims via XFF (e.g. via curl -H), rather
+# than the kubectl port-forward's loopback IP.
+#
+# In production this works because there's a real L4 LB / CDN in
+# front appending the real client IP to XFF.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: security-mix-xff
+  namespace: demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: security-mix
+  clientIPDetection:
+    xForwardedFor:
+      numTrustedHops: 1

@@ -44,12 +44,12 @@ done with Phase 2: `cd 00-kind-bootstrap && make down`.
 | 11 | [`11-clienttrafficpolicy`](./11-clienttrafficpolicy/) | EG `ClientTrafficPolicy` — three observable knobs (XFF trust hops, HTTP/1 header case, path merge-slashes); shows where each lands in the generated HCM config. |
 | 12 | [`12-backendtrafficpolicy`](./12-backendtrafficpolicy/) | EG `BackendTrafficPolicy` — five features at once (retry, timeout, LB, active HC, outlier detection). Behavioral tests for retry + timeout, config_dump proof for the rest. |
 | 13 | [`13-securitypolicy-jwt`](./13-securitypolicy-jwt/)  | `SecurityPolicy.jwt` with `localJWKS.inline`, claim-to-header extraction, and 5 verify scenarios (missing/valid/expired/wrong-aud/wrong-iss). Mirrors Phase 1 ex 12. |
-| 14 | `14-securitypolicy-oidc` *(planned)*                  | OIDC login flow with Dex or Keycloak. |
-| 15 | `15-securitypolicy-basicauth-cors-ipallow` *(planned)*| Smaller `SecurityPolicy` features grouped. |
-| 16 | `16-securitypolicy-extauth` *(planned)*               | External authz; mirrors Phase 1 `13`. |
-| 17 | `17-envoyextensionpolicy-wasm-lua` *(planned)*        | EG-supported Wasm/Lua extension attachment. |
-| 18 | `18-envoypatchpolicy` *(planned)*                     | Escape hatch: raw xDS patch when no CRD covers it. |
-| 19 | `19-rate-limiting` *(planned)*                        | EG's global ratelimit; mirrors Phase 1 `11`. |
+| 14 | [`14-securitypolicy-oidc`](./14-securitypolicy-oidc/) | `SecurityPolicy.oidc` + in-cluster Dex. Two-URL trick (issuer vs backendRefs). Verify proves the 302 + oauth2 filter; full login is a manual browser walkthrough. |
+| 15 | [`15-securitypolicy-basicauth-cors-ipallow`](./15-securitypolicy-basicauth-cors-ipallow/) | Three SP sub-features in one CR: basicAuth (htpasswd Secret), CORS (allowed origins), IP allowlist (CIDR rules) combined with XFF-trust via CTP. |
+| 16 | [`16-securitypolicy-extauth`](./16-securitypolicy-extauth/) | `SecurityPolicy.extAuth.http` → toy Flask authz pod with /admin and /protected gating. Live failOpen test (scale authz to 0, watch fail-closed). |
+| 17 | `17-envoyextensionpolicy-wasm-lua` *(skipped)*        | Wasm covered in Phase 1 ex 15. |
+| 18 | [`18-envoypatchpolicy`](./18-envoypatchpolicy/)       | Raw xDS escape hatch. Two JSONPatches: listener buffer + route_config response header. Self-heals the EG feature flag. |
+| 19 | [`19-rate-limiting`](./19-rate-limiting/)             | `BTP.rateLimit.type: Local` — 3 buckets (free/premium/catch-all) keyed on `x-tenant`. Verify asserts 200/429 split. Global mode sketched in README. |
 | 20 | `20-httproutefilter` *(planned)*                      | The `HTTPRouteFilter` CR for richer filter chains. |
 | 21 | `21-observability` *(planned)*                        | Access logs, metrics, OTLP traces via `EnvoyProxy` + `Telemetry`. |
 | 22 | `22-listenersets` *(planned)*                         | **Headline new feature.** Base `Gateway` + multiple `XListenerSet`s, merged listener config in `egctl`. |

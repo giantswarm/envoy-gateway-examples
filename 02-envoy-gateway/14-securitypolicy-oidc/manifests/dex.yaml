@@ -1,0 +1,109 @@
+---
+# Dex — a small OIDC identity provider. We run it in the cluster
+# with a single static user so the demo doesn't depend on an
+# external IdP.
+#
+# Why the issuer is `http://dex.demo.svc.cluster.local:5556/dex`:
+#   - EG's translator validates OIDC at policy-apply time by
+#     fetching <issuer>/.well-known/openid-configuration from the
+#     controller pod. That pod can only resolve in-cluster DNS, so
+#     the issuer must be reachable via the cluster's DNS.
+#   - The data-plane Envoy uses the same string for token validation
+#     (`iss` claim must match).
+#   - The browser ALSO needs to reach this URL during the login
+#     redirect. We make that work with:
+#       kubectl port-forward svc/dex 5556:5556
+#       + /etc/hosts entry: 127.0.0.1 dex.demo.svc.cluster.local
+#     See README for the full walk.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex-config
+  namespace: demo
+data:
+  config.yaml: |
+    issuer: http://dex.demo.svc.cluster.local:5556/dex
+
+    storage:
+      type: memory
+
+    web:
+      http: 0.0.0.0:5556
+
+    # The OIDC client EG's SecurityPolicy registers itself as.
+    staticClients:
+      - id: envoy-gateway
+        name: Envoy Gateway
+        redirectURIs:
+          - http://app.local:18150/oauth2/callback
+        secret: totally-tutorial-client-secret
+
+    # One built-in user. NOT for production — passwords in YAML are
+    # an anti-pattern. Real IdPs hook into LDAP / OAuth / SAML / etc.
+    enablePasswordDB: true
+    staticPasswords:
+      - email: admin@example.com
+        # bcrypt hash of the string "password" (cost 10).
+        # Generate your own with: htpasswd -nbBC 10 "" password
+        # The "$2y$" prefix from htpasswd is equivalent to "$2a$".
+        hash: $2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy
+        username: admin
+        userID: 08a8684b-db88-4b73-90a9-3cd1661f5466
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: demo
+  labels:
+    app: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dex
+  template:
+    metadata:
+      labels:
+        app: dex
+    spec:
+      containers:
+        - name: dex
+          image: ghcr.io/dexidp/dex:v2.41.1
+          command: ["/usr/local/bin/dex", "serve", "/etc/dex/config.yaml"]
+          ports:
+            - containerPort: 5556
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /dex/healthz
+              port: 5556
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+      volumes:
+        - name: config
+          configMap:
+            name: dex-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: demo
+spec:
+  type: ClusterIP
+  selector:
+    app: dex
+  ports:
+    - name: http
+      port: 5556
+      targetPort: http
