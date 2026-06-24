@@ -15,7 +15,7 @@ services:
     expose: ["8080"]
 
   envoy:
-    image: envoyproxy/envoy:v1.34.1
+    image: envoyproxy/envoy:v1.38.3
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
     ports:
       - "10000:10000"
