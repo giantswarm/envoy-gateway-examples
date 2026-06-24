@@ -5,7 +5,7 @@ services:
     expose: ["8080"]
 
   envoy:
-    image: envoyproxy/envoy:v1.34.1
+    image: envoyproxy/envoy:v1.38.3
     # --concurrency 1 makes the per-worker bucket behavior easy to reason
     # about in the demo. Without it, the per-worker buckets are separate
     # and "send 6 requests, expect 5 OK + 1 over-limit" wouldn't be a
