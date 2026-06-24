@@ -1,0 +1,17 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: secure
+  namespace: tls-upstream-demo
+spec:
+  parentRefs:
+    - name: secure-up
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: secure-backend
+          port: 8443                # the backend's TLS port (Service port)
