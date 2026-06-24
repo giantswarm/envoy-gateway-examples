@@ -1,0 +1,50 @@
+---
+# Gateway with TWO HTTPS listeners, both on :443, distinguished by
+# SNI (the Gateway API `hostname:` field). Each listener has its
+# own certificate Secret. EG translates this into:
+#
+#   one Envoy listener on :443
+#   ├── tls_inspector listener_filter (peeks at the ClientHello)
+#   ├── filter_chain server_names=[hello.local] + DownstreamTLS w/ hello cert
+#   └── filter_chain server_names=[api.local]   + DownstreamTLS w/ api   cert
+#
+# Compare with Phase 1 example 09's envoy.yaml — same shape, just
+# expressed as CRs.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: secure
+  namespace: demo
+spec:
+  gatewayClassName: eg
+
+  listeners:
+    # ----- listener for hello.local ----------------------------------- #
+    - name: https-hello
+      hostname: hello.local           # SNI matcher; populates filter_chain_match.server_names
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate               # alt: Passthrough (no cert needed; we cover that in exercise 5)
+        certificateRefs:
+          - group: ""                 # core group
+            kind: Secret
+            name: hello-tls           # type: kubernetes.io/tls Secret in the same namespace
+      allowedRoutes:
+        namespaces:
+          from: Same
+
+    # ----- listener for api.local ------------------------------------- #
+    - name: https-api
+      hostname: api.local
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: api-tls
+      allowedRoutes:
+        namespaces:
+          from: Same

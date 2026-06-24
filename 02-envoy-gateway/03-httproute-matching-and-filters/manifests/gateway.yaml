@@ -1,0 +1,18 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: routing
+  namespace: demo
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # `Same` keeps the API tidy: HTTPRoutes in this Gateway's
+      # namespace can attach without a ReferenceGrant. Cross-namespace
+      # attach is covered in example 08.
+      allowedRoutes:
+        namespaces:
+          from: Same

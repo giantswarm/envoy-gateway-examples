@@ -1,0 +1,162 @@
+# --------------------------------------------------------------------------- #
+# 06 — Timeouts and retries
+#
+# Four backends (hello-a, hello-b, hello-c, hello-bad).
+# Two clusters:
+#   cluster_healthy — a, b, c  (all healthy; used for timeout demos)
+#   cluster_flaky   — a, b, bad  (1/3 always 500; used for retry demos)
+#
+# Five routes show the knobs in isolation:
+#   /healthy        — control. No special timeout / no retry. Always 200.
+#   /strict         — 1s route timeout to /slow. Backend sleeps 3s -> 504.
+#   /strict-retry   — same backend; per_try_timeout 1s, num_retries 2.
+#                     Each try times out, retries 2x, final 504 after ~3s.
+#   /flaky          — to cluster_flaky, no retry. Expect ~33% 5xx.
+#   /flaky-retry    — to cluster_flaky, retry_on 5xx num_retries 2 with
+#                     previous_hosts predicate. Expect ~100% 200.
+#
+# The backend's /slow endpoint reads ?seconds=N. The routes only rewrite
+# the PATH (regex_rewrite has no query-string knob), so verify.sh sends
+# the seconds as a query string the rewrite preserves.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: timeouts_retries
+                      domains: ["*"]
+                      routes:
+
+                        # ------------------------------------------------- #
+                        # /healthy — control
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/healthy" }
+                          route:
+                            cluster: cluster_healthy
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        # ------------------------------------------------- #
+                        # /strict — strict route timeout, no retries
+                        # Per Envoy default the route timeout is 15s. Here
+                        # we override it to 1s so the slow backend trips it.
+                        # ------------------------------------------------- #
+                        - match: { path: "/strict" }
+                          route:
+                            cluster: cluster_healthy
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/slow"
+                            timeout: 1s
+
+                        # ------------------------------------------------- #
+                        # /strict-retry — retries with per_try_timeout
+                        #
+                        # Overall budget = `timeout` (6s here). Each attempt
+                        # is bounded by `per_try_timeout` (1s). num_retries
+                        # is RETRIES AFTER THE FIRST ATTEMPT — so 2 means
+                        # 1 initial + 2 retries = 3 tries total.
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/strict-retry" }
+                          route:
+                            cluster: cluster_healthy
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/slow"
+                            timeout: 6s
+                            retry_policy:
+                              retry_on: "5xx,gateway-error,reset"
+                              num_retries: 2
+                              per_try_timeout: 1s
+
+                        # ------------------------------------------------- #
+                        # /flaky — to the cluster with a permanently-broken
+                        # endpoint. No retry: round-robin means ~1/3 fail.
+                        # ------------------------------------------------- #
+                        - match: { path: "/flaky" }
+                          route:
+                            cluster: cluster_flaky
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        # ------------------------------------------------- #
+                        # /flaky-retry — same cluster, but retry on 5xx
+                        # and refuse to retry to the same host. With 2
+                        # retries and one bad endpoint out of three, almost
+                        # every request lands on a healthy host eventually.
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/flaky-retry" }
+                          route:
+                            cluster: cluster_flaky
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                            retry_policy:
+                              retry_on: "5xx"
+                              num_retries: 2
+                              # Don't retry the host that just failed.
+                              # In modern Envoy the `name:` alone isn't
+                              # enough — you must give the typed_config so
+                              # the extension implementation can be looked
+                              # up by proto type URL.
+                              retry_host_predicate:
+                                - name: envoy.retry_host_predicates.previous_hosts
+                                  typed_config:
+                                    "@type": type.googleapis.com/envoy.extensions.retry.host.previous_hosts.v3.PreviousHostsPredicate
+                              host_selection_retry_max_attempts: 3
+                              # Exponential backoff between tries. Optional
+                              # but recommended in production — protects the
+                              # upstream from synchronised retry storms.
+                              retry_back_off:
+                                base_interval: 0.025s
+                                max_interval: 0.25s
+
+  clusters:
+
+    # All three healthy — for the timeout demos.
+    - name: cluster_healthy
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: cluster_healthy
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: hello-a, port_value: 8080 } } }
+              - endpoint: { address: { socket_address: { address: hello-b, port_value: 8080 } } }
+              - endpoint: { address: { socket_address: { address: hello-c, port_value: 8080 } } }
+
+    # 2 good + 1 broken — for the retry demos.
+    - name: cluster_flaky
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: cluster_flaky
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: hello-a,   port_value: 8080 } } }
+              - endpoint: { address: { socket_address: { address: hello-b,   port_value: 8080 } } }
+              - endpoint: { address: { socket_address: { address: hello-bad, port_value: 8080 } } }

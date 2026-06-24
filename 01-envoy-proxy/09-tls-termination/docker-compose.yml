@@ -1,0 +1,24 @@
+services:
+  hello-one:
+    build: ../../apps/helloworld
+    environment: { NAME: hello-one }
+    expose: ["8080"]
+
+  hello-two:
+    build: ../../apps/helloworld
+    environment: { NAME: hello-two }
+    expose: ["8080"]
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    ports:
+      - "10000:10000"   # plaintext HTTP
+      - "10443:10443"   # TLS
+      - "9901:9901"     # admin
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./certs:/etc/envoy/certs:ro
+    depends_on:
+      - hello-one
+      - hello-two

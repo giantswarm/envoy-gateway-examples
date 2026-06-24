@@ -1,0 +1,20 @@
+---
+# TLSRoute is also v1alpha2. It can only attach to listeners with
+# protocol: TLS, mode: Passthrough. The `hostnames:` here intersects
+# with the listener's `hostname:` (both `tls.local`) — for
+# Passthrough that's the SNI to filter on.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: tls-backend
+  namespace: l4-demo
+spec:
+  parentRefs:
+    - name: l4
+      sectionName: tls
+  hostnames:
+    - tls.local
+  rules:
+    - backendRefs:
+        - name: tls-backend
+          port: 8443                  # nginx's TLS port

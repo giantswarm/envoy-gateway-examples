@@ -1,0 +1,175 @@
+# --------------------------------------------------------------------------- #
+# 03 — Routing basics
+#
+# Same listener + cluster as the previous examples. We're growing the route
+# table to show how Envoy actually matches a request:
+#
+#   1. virtual_host  — picked by the :authority / Host header
+#   2. route         — first one whose match{} block satisfies the request
+#   3. action        — route / redirect / direct_response
+#   4. transform     — optional prefix_rewrite / regex_rewrite / host_rewrite
+#
+# Routes are evaluated TOP-TO-BOTTOM, FIRST MATCH WINS. Put more specific
+# routes above less specific ones, or you'll never reach the specific one.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 10000 }
+
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+
+                  virtual_hosts:
+                    # --------------------------------------------------- #
+                    # Virtual host 1: api.local
+                    #
+                    # Matched by Host: api.local (or :authority: api.local
+                    # over HTTP/2). Use this pattern to host multiple
+                    # logical services off the same Envoy listener.
+                    # --------------------------------------------------- #
+                    - name: api
+                      domains: ["api.local"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: helloworld_cluster
+                            # Every request to api.local lands on /echo so
+                            # the backend's response makes the rewrite
+                            # visible. We use regex_rewrite here (not
+                            # prefix_rewrite) because prefix_rewrite would
+                            # keep the suffix — /anything would become
+                            # /echoanything and 404 on the backend.
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/echo"
+
+                    # --------------------------------------------------- #
+                    # Virtual host 2: catch-all
+                    #
+                    # The "*" matches anything. Note the ORDER of routes
+                    # below — exact-match and header-gated routes come
+                    # BEFORE the bare prefix "/" catch-all.
+                    # --------------------------------------------------- #
+                    - name: local_service
+                      domains: ["*"]
+                      routes:
+
+                        # 1. EXACT MATCH + DIRECT RESPONSE
+                        # Healthchecks shouldn't hit the backend. Envoy
+                        # answers /healthz itself with a fixed body.
+                        - match:
+                            path: "/healthz"
+                          direct_response:
+                            status: 200
+                            body:
+                              inline_string: "ok\n"
+
+                        # 2. PREFIX REWRITE
+                        # /api/v1/foo  ->  /foo on the backend.
+                        - match:
+                            prefix: "/api/v1/"
+                          route:
+                            cluster: helloworld_cluster
+                            prefix_rewrite: "/"
+
+                        # 3. REDIRECT
+                        # /legacy/anything -> 301 to /api/v1
+                        - match:
+                            prefix: "/legacy"
+                          redirect:
+                            path_redirect: "/api/v1"
+                            response_code: MOVED_PERMANENTLY  # 301
+
+                        # 4. HEADER-GATED ROUTE + REGEX REWRITE
+                        # /admin/* only if the request carries the API key.
+                        # Matchers AND-ed: prefix AND header must both hit.
+                        #
+                        # Note we use `regex_rewrite` here instead of
+                        # `prefix_rewrite`. `prefix_rewrite` replaces only
+                        # the matched prefix and keeps the suffix — so
+                        # /admin/secret would become /echo/secret, which
+                        # the backend doesn't have. `regex_rewrite` rewrites
+                        # the WHOLE path, collapsing any /admin/* to /echo.
+                        - match:
+                            prefix: "/admin"
+                            headers:
+                              - name: x-api-key
+                                string_match:
+                                  exact: hunter2
+                          route:
+                            cluster: helloworld_cluster
+                            regex_rewrite:
+                              pattern: { regex: "^/admin(/.*)?$" }
+                              substitution: "/echo"
+
+                        # 5. ORDERING DEMO
+                        # /admin without the header falls through to here
+                        # and gets a 401. If this were ABOVE route #4 the
+                        # gate would be unreachable — first match wins.
+                        - match:
+                            prefix: "/admin"
+                          direct_response:
+                            status: 401
+                            body:
+                              inline_string: "unauthorized\n"
+
+                        # 6. QUERY-PARAM MATCH + REQUEST HEADER INJECTION
+                        # /q?debug=true  ->  backend /echo,
+                        # but we add an x-debug header along the way.
+                        - match:
+                            prefix: "/q"
+                            query_parameters:
+                              - name: debug
+                                string_match:
+                                  exact: "true"
+                          route:
+                            cluster: helloworld_cluster
+                            prefix_rewrite: "/echo"
+                          request_headers_to_add:
+                            - header:
+                                key: x-debug
+                                value: "on"
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
+
+                        # 7. CATCH-ALL
+                        # Anything we didn't match above goes to the
+                        # backend untouched (root cluster, no rewrite).
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: helloworld_cluster
+
+  clusters:
+    - name: helloworld_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: helloworld_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: helloworld, port_value: 8080 }

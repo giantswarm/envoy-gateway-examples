@@ -1,0 +1,81 @@
+---
+# Tiny CoreDNS instance — serves a single zone `example.test` with
+# a couple of A records. The point isn't DNS as such; it's that the
+# backend speaks a UDP protocol and we want to demonstrate UDPRoute.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-config
+  namespace: l4-demo
+data:
+  Corefile: |
+    example.test:5353 {
+        log
+        errors
+        # In-Corefile static records — easier to read than a separate
+        # zone file. Format: 'host <fqdn> <ip>' (or 'a <fqdn> <ip>').
+        hosts {
+          10.10.10.10 demo.example.test
+          10.10.10.20 other.example.test
+          fallthrough
+        }
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns
+  namespace: l4-demo
+  labels:
+    app: coredns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coredns
+  template:
+    metadata:
+      labels:
+        app: coredns
+    spec:
+      containers:
+        - name: coredns
+          image: docker.io/coredns/coredns:1.11.3
+          args: ["-conf", "/etc/coredns/Corefile"]
+          ports:
+            - containerPort: 5353
+              name: dns-udp
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/coredns
+              readOnly: true
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 100m, memory: 96Mi }
+          readinessProbe:
+            tcpSocket:                  # CoreDNS opens a TCP listener
+              port: 5353                # on the same port for queries
+            initialDelaySeconds: 1      # too large for UDP.
+            periodSeconds: 3
+      volumes:
+        - name: config
+          configMap:
+            name: coredns-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coredns
+  namespace: l4-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: coredns
+  ports:
+    - name: dns-udp
+      port: 5353
+      targetPort: dns-udp
+      protocol: UDP

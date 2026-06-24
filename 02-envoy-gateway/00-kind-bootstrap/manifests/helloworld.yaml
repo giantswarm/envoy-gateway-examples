@@ -1,0 +1,76 @@
+---
+# The shared helloworld backend, installed once by 00-kind-bootstrap and
+# referenced by every subsequent example via `backendRefs:` on its
+# HTTPRoute.
+#
+# Same Flask app you used in Phase 1 (apps/helloworld). We build it
+# locally and `kind load docker-image` so the cluster can pull it
+# without going to a registry.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helloworld
+  namespace: demo
+  labels:
+    app: helloworld
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: helloworld
+  template:
+    metadata:
+      labels:
+        app: helloworld
+    spec:
+      containers:
+        - name: helloworld
+          image: envoy-gateway-examples/helloworld:tutorial
+          # `Never` because we kind-load the image; no registry pull.
+          imagePullPolicy: Never
+          env:
+            # The pod name is the cleanest "which replica served me"
+            # signal once we're inside Kubernetes.
+            - name: NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: helloworld
+  namespace: demo
+  labels:
+    app: helloworld
+spec:
+  type: ClusterIP
+  selector:
+    app: helloworld
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http

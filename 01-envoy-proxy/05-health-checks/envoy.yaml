@@ -1,0 +1,114 @@
+# --------------------------------------------------------------------------- #
+# 05 — Active health checks and outlier detection
+#
+# One cluster, FOUR endpoints:
+#   hello-a, hello-b, hello-c   — normal
+#   hello-bad                   — BREAK=true, always returns 500
+#
+# Two health mechanisms running together:
+#
+#   ACTIVE HEALTH CHECK (health_checks{})
+#     Envoy probes each endpoint every `interval`. Marks it unhealthy
+#     after `unhealthy_threshold` consecutive failures; brings it back
+#     after `healthy_threshold` consecutive successes. Out-of-band: it
+#     does not depend on real traffic.
+#
+#   OUTLIER DETECTION (outlier_detection{})
+#     Passive. Watches real responses on the data path and ejects an
+#     endpoint that produces too many consecutive 5xx / connection
+#     failures / locally-originated errors. Ejection grows with repeat
+#     offenders.
+#
+# Both can be on at the same time and complement each other. Active HC
+# catches dead processes; outlier catches a sick endpoint that still
+# answers but answers badly.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: local_service
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: helloworld_cluster }
+
+  clusters:
+    - name: helloworld_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+
+      # ----------------------------------------------------------------- #
+      # ACTIVE HEALTH CHECKS
+      # Envoy sends GET / to each endpoint every 2s. Two consecutive
+      # non-2xx mark the endpoint unhealthy; two consecutive 2xx restore
+      # it. hello-bad always returns 500, so Envoy ejects it shortly
+      # after startup.
+      # ----------------------------------------------------------------- #
+      health_checks:
+        - timeout: 1s
+          interval: 2s
+          unhealthy_threshold: 2
+          healthy_threshold: 2
+          # Optional: don't all probe at exactly the same instant.
+          # Durations are google.protobuf.Duration — must end in `s`. Use
+          # fractional seconds for sub-second values (0.5s, not 500ms).
+          interval_jitter: 0.5s
+          http_health_check:
+            path: "/"
+            # Treat any 2xx as healthy. Default behavior is 200 only; this
+            # is here to show the knob exists.
+            expected_statuses:
+              - { start: 200, end: 300 }
+
+      # ----------------------------------------------------------------- #
+      # OUTLIER DETECTION
+      # Eject an endpoint after 5 consecutive 5xx on the data path. First
+      # ejection lasts `base_ejection_time`; each subsequent one is
+      # multiplied. Cap at `max_ejection_percent` of the cluster so we
+      # never eject everyone (which would trigger panic mode).
+      # ----------------------------------------------------------------- #
+      outlier_detection:
+        consecutive_5xx: 5
+        interval: 5s
+        base_ejection_time: 10s
+        max_ejection_percent: 50
+        # Also count locally-generated 5xx (e.g. upstream connect failure)
+        # toward the consecutive_5xx counter.
+        enforcing_consecutive_5xx: 100
+        enforcing_consecutive_gateway_failure: 100
+
+      load_assignment:
+        cluster_name: helloworld_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: hello-a,   port_value: 8080 } }
+              - endpoint:
+                  address: { socket_address: { address: hello-b,   port_value: 8080 } }
+              - endpoint:
+                  address: { socket_address: { address: hello-c,   port_value: 8080 } }
+              - endpoint:
+                  address: { socket_address: { address: hello-bad, port_value: 8080 } }

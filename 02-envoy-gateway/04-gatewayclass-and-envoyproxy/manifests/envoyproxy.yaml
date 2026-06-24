@@ -1,0 +1,109 @@
+---
+# Per-Gateway EnvoyProxy override.
+#
+# Two ways to attach an EnvoyProxy to a Gateway:
+#
+# 1. GatewayClass.spec.parametersRef
+#    => applies to EVERY Gateway using that class (cluster default).
+#    The bootstrap installs `default-envoyproxy` in
+#    `envoy-gateway-system` this way; see ../00-kind-bootstrap/.
+#
+# 2. Gateway.spec.infrastructure.parametersRef (used here)
+#    => applies to ONE specific Gateway and ENTIRELY REPLACES the
+#    GatewayClass default (it does NOT merge field-by-field). Must
+#    live in the SAME namespace as the Gateway.
+#
+# Because (2) is a full replace, EVERY field we still want from
+# the class default has to be restated here. The most common
+# gotcha on kind: forget `envoyService.type: ClusterIP` and the
+# Gateway sits at Programmed=False / AddressNotAssigned because EG
+# defaults to type: LoadBalancer and kind has no LB controller.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: tuned-proxy
+  namespace: demo
+spec:
+  # ------------------------------------------------------------------ #
+  # 1. Kubernetes provider — knobs for the auto-generated Deployment
+  # and Service. EG creates these resources in envoy-gateway-system
+  # when the Gateway is Programmed; the spec below patches them.
+  # ------------------------------------------------------------------ #
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        # Replicas of the data plane. Each one runs an Envoy container
+        # configured by xDS from the control plane. More replicas = more
+        # request capacity + HA; same generated config across all of
+        # them.
+        replicas: 3
+
+        # Pod-level customizations are nested under `pod:`. Use
+        # annotations for things like Prometheus scraping or workload
+        # identity. Labels here ride on the auto-generated pods —
+        # handy for `kubectl -l` filtering.
+        pod:
+          annotations:
+            example.envoy-gateway/tutorial: "04"
+          labels:
+            tutorial-pod: "true"
+
+        # Container-level: resource requests/limits, securityContext,
+        # env, etc. You CAN override the image here, but it must be
+        # an EG-compatible build (extensions + Wasm runtime EG's
+        # bootstrap depends on). The vanilla upstream
+        # `envoyproxy/envoy:vX.Y.Z` is NOT enough — EG ships
+        # `envoyproxy/envoy:distroless-vX.Y.Z` (or a contrib build)
+        # and uses that by default. Mismatched image = bootstrap
+        # parse errors and a crashlooping data plane.
+        #
+        # See exercise 6 if you want to try pinning.
+        container:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+      # Service knobs. Restated here because per-Gateway EnvoyProxy
+      # fully replaces the class default — we don't inherit ClusterIP
+      # from `default-envoyproxy` even though it's set there.
+      envoyService:
+        type: ClusterIP
+
+  # ------------------------------------------------------------------ #
+  # 2. Logging — set the log level for the running Envoy proxies.
+  # Defaults to `warn`. `debug` is loud but excellent for tutorials.
+  #
+  # `default` covers all loggers; you can also override individual
+  # loggers under `componentLogs:` (e.g. `http: trace, connection: debug`).
+  # ------------------------------------------------------------------ #
+  logging:
+    level:
+      default: debug
+      # Per-component overrides — see Envoy's `--log-level` for the list.
+      # http: info
+      # connection: warn
+
+  # ------------------------------------------------------------------ #
+  # 3. Telemetry — example 21 covers metrics/traces/access logs in
+  # depth. Leaving the block here so the shape is visible.
+  # ------------------------------------------------------------------ #
+  # telemetry:
+  #   accessLog:
+  #     settings: [...]
+  #   metrics:
+  #     prometheus: { disable: false }
+
+  # ------------------------------------------------------------------ #
+  # 4. Bootstrap escape hatch — paste raw Envoy bootstrap JSON/YAML to
+  # patch the generated bootstrap config. Use only when no CRD covers
+  # the use case. Example 18 (EnvoyPatchPolicy) is usually safer.
+  # ------------------------------------------------------------------ #
+  # bootstrap:
+  #   type: Merge
+  #   value: |
+  #     ...

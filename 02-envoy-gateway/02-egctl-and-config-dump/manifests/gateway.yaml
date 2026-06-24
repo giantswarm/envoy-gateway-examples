@@ -1,0 +1,19 @@
+---
+# Independent Gateway for this example. Coexists with example 01's
+# `eg` Gateway — each Gateway gets its own Envoy Deployment in
+# envoy-gateway-system, so you can have both running side by side and
+# compare the generated configs.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: inspect
+  namespace: demo
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same

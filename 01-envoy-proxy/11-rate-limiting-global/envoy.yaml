@@ -1,0 +1,161 @@
+# --------------------------------------------------------------------------- #
+# 11 — Global rate limiting
+#
+# Architecture:
+#
+#   client ──> Envoy ──[gRPC]──> ratelimit service ──> Redis
+#                ▲                        │
+#                └────── allow / deny ────┘
+#
+# Each request that hits a route with `rate_limits:` produces one or more
+# DESCRIPTORS. Envoy ships them over gRPC to the external rate-limit
+# service (envoyproxy/ratelimit). The service walks its YAML config tree
+# (ratelimit-config/config.yaml), atomic-increments counters in Redis,
+# and answers OK / OVER_LIMIT. Envoy then forwards or returns 429.
+#
+# Why this is more powerful than example 10's local_ratelimit:
+#   - Shared across every Envoy worker AND every Envoy replica.
+#   - Wildcard descriptors ("each unique value of `user`") are natural.
+#   - Hierarchical policy (tier-based, multi-dimensional).
+#   - Single source of truth for the rule.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+
+                  # ------------------------------------------------------- #
+                  # The rate-limit HTTP filter. Points at a gRPC service
+                  # via a CLUSTER (defined below). The filter doesn't
+                  # do anything by itself — it only acts on routes that
+                  # have a `rate_limits:` block.
+                  # ------------------------------------------------------- #
+                  - name: envoy.filters.http.ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+                      # Must match `domain:` in ratelimit-config/config.yaml.
+                      domain: rl_demo
+                      stage: 0
+                      # If the ratelimit service is unreachable / errors,
+                      # `failure_mode_deny: false` lets the request
+                      # through. `true` would refuse all traffic on RLS
+                      # outage — usually the wrong trade-off, but consider
+                      # it for highly sensitive endpoints.
+                      failure_mode_deny: false
+                      timeout: 0.25s
+                      enable_x_ratelimit_headers: DRAFT_VERSION_03
+                      rate_limit_service:
+                        grpc_service:
+                          envoy_grpc:
+                            cluster_name: ratelimit_cluster
+                        transport_api_version: V3
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: rl_route
+                  virtual_hosts:
+                    - name: rl_demo
+                      domains: ["*"]
+                      routes:
+
+                        # ----------------------------------------------- #
+                        # /free — no rate_limits block, no descriptor
+                        # produced, no call to RLS.
+                        # ----------------------------------------------- #
+                        - match: { path: "/free" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        # ----------------------------------------------- #
+                        # /global — every request produces ONE descriptor
+                        # (generic_key=default). All callers share one
+                        # bucket of 5 req/s.
+                        # ----------------------------------------------- #
+                        - match: { path: "/global" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                            rate_limits:
+                              - actions:
+                                  - generic_key:
+                                      descriptor_value: default
+
+                        # ----------------------------------------------- #
+                        # /per-user — descriptor is (user=<x-user-id>).
+                        # If x-user-id is absent the action drops the
+                        # descriptor and the request is not limited at
+                        # all. That's a real foot-gun in production —
+                        # protect against it with header validation or
+                        # a fallback descriptor.
+                        # ----------------------------------------------- #
+                        - match: { path: "/per-user" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                            rate_limits:
+                              - actions:
+                                  - request_headers:
+                                      header_name: "x-user-id"
+                                      descriptor_key: "user"
+
+  clusters:
+
+    - name: hello_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: hello, port_value: 8080 } }
+
+    # ----------------------------------------------------------------- #
+    # ratelimit_cluster — the gRPC channel to the rate-limit service.
+    #
+    # CRITICAL: must be HTTP/2 — gRPC needs it. Without
+    # `http2_protocol_options` you'll see opaque "Connection refused"
+    # or "Unsupported protocol" errors and every request will fall
+    # through `failure_mode_deny`.
+    # ----------------------------------------------------------------- #
+    - name: ratelimit_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      connect_timeout: 1s
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: ratelimit_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: ratelimit, port_value: 8081 }

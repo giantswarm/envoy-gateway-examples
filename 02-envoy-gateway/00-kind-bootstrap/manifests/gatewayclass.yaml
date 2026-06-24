@@ -1,0 +1,21 @@
+---
+# Explicit GatewayClass so subsequent examples don't depend on whether
+# the EG helm chart's default templates included one (varies by chart
+# version). The controller name MUST match what envoy-gateway watches —
+# `gateway.envoyproxy.io/gatewayclass-controller` is the canonical
+# value, set by the chart's `config.envoyGateway.gateway.controllerName`.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  # Default parameters applied to every Gateway using this class.
+  # See manifests/default-envoyproxy.yaml — switches the auto-
+  # created data-plane Service to ClusterIP so the Gateway reports
+  # Programmed=True on kind (no LB controller).
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: default-envoyproxy
+    namespace: envoy-gateway-system

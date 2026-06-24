@@ -1,0 +1,33 @@
+---
+# Gateway with a per-Gateway EnvoyProxy override.
+#
+# `spec.infrastructure.parametersRef` is Gateway API's pluggable hook
+# for implementation-specific knobs. Envoy Gateway interprets the
+# referenced kind=EnvoyProxy and merges it with the GatewayClass-
+# default EnvoyProxy.
+#
+# Result: cluster-wide defaults still apply (e.g. envoyService.type:
+# ClusterIP from ../00-kind-bootstrap/) BUT the fields set in
+# tuned-proxy override them.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tuned
+  namespace: demo
+spec:
+  gatewayClassName: eg
+
+  # parametersRef MUST live in the same namespace as the Gateway.
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: tuned-proxy
+
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
