@@ -1,0 +1,49 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authz
+  namespace: demo
+  labels:
+    app: authz
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: authz
+  template:
+    metadata:
+      labels:
+        app: authz
+    spec:
+      containers:
+        - name: authz
+          image: envoy-gateway-examples/authz:tutorial   # built by gen-image.sh
+          imagePullPolicy: Never                         # kind-loaded, no registry
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: authz
+  namespace: demo
+spec:
+  type: ClusterIP
+  selector:
+    app: authz
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

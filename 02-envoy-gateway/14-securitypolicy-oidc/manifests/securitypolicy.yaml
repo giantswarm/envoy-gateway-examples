@@ -1,0 +1,63 @@
+---
+# SecurityPolicy with OIDC.
+#
+# Drives the standard OIDC Authorization Code flow:
+#   1. Unauthenticated request to a protected URL
+#   2. -> 302 to the IdP's /auth endpoint
+#   3. User logs in at the IdP
+#   4. IdP redirects back to <redirectURL>?code=...
+#   5. EG/Envoy exchanges the code for tokens at /token (back channel)
+#   6. EG sets a session cookie and 302s to the original URL
+#   7. Subsequent requests are validated via the cookie
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: oidc-protect
+  namespace: demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: oidc-protect
+
+  oidc:
+    provider:
+      # Single URL — both EG's translator AND the browser use this
+      # exact string.
+      #
+      # Why not the elegant "browser-facing URL + backendRefs override"?
+      # EG's translator validates the OIDC provider at policy-apply
+      # time by fetching <issuer>/.well-known/openid-configuration
+      # from the controller pod, which can ONLY resolve in-cluster
+      # DNS. A localhost URL wouldn't resolve there, and the
+      # SecurityPolicy would fail to Accept (which in turn keeps the
+      # Gateway from reaching Programmed).
+      #
+      # The cost: the browser also needs to reach this URL. The
+      # README documents the /etc/hosts + port-forward dance.
+      issuer: http://dex.demo.svc.cluster.local:5556/dex
+
+    # Client credentials registered with the IdP.
+    clientID: envoy-gateway
+    clientSecret:
+      name: oidc-client-secret             # Secret with key `client-secret`
+
+    # Standard OIDC scopes. `openid` is required; `email` and
+    # `profile` make user info available in claims.
+    scopes:
+      - openid
+      - email
+      - profile
+
+    # IdP redirects back here after login. Must EXACTLY match the
+    # redirectURI registered in Dex's staticClients config.
+    redirectURL: http://app.local:18150/oauth2/callback
+
+    # Hitting this path clears the session cookie.
+    logoutPath: /logout
+
+    # Other knobs (not exercised here):
+    # forwardAccessToken: true      # propagate access token upstream as header
+    # passThroughAuthHeader: true   # don't strip the inbound Authorization header
+    # defaultTokenTTL: 24h
+    # refreshToken: true            # use refresh tokens to extend sessions

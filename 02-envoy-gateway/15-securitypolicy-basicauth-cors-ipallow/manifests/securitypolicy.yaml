@@ -1,0 +1,73 @@
+---
+# Three SecurityPolicy sub-features in one CR — they compose
+# naturally and run in this order in Envoy's HCM:
+#
+#   1. cors            — preflight handling; OPTIONS short-circuits
+#                        the rest of the chain
+#   2. authorization   — IP allow/deny based on client CIDR
+#   3. basicAuth       — Authorization: Basic <base64(user:pass)>
+#
+# So a request reaches the backend only if its origin/method is
+# CORS-compatible (for non-preflight, just checks headers), its
+# (XFF-derived) source IP is in an allowed CIDR, AND it presents
+# valid basic-auth credentials.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: security-mix
+  namespace: demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: security-mix
+
+  # ------------------------------------------------------------------ #
+  # 1. CORS — allow browser-origin requests from specific origins.
+  # ------------------------------------------------------------------ #
+  cors:
+    allowOrigins:
+      - https://app.example.com           # exact
+      - https://*.partners.example.com    # wildcard subdomain
+    allowMethods:
+      - GET
+      - POST
+      - OPTIONS
+    allowHeaders:
+      - authorization                     # required so basic-auth can pass
+      - content-type
+      - x-custom-header
+    exposeHeaders:
+      - x-response-time
+    maxAge: 1h
+    # `allowCredentials: true` lets the browser send Authorization /
+    # cookies. Required when used with basicAuth from a browser.
+    allowCredentials: true
+
+  # ------------------------------------------------------------------ #
+  # 2. Authorization — IP allow rules. Source IP is taken from the
+  #    XFF header thanks to the ClientTrafficPolicy.
+  # ------------------------------------------------------------------ #
+  authorization:
+    defaultAction: Deny                   # anything not explicitly allowed -> 403
+    rules:
+      - name: allow-internal
+        action: Allow
+        principal:
+          clientCIDRs:
+            - 10.0.0.0/8                  # RFC1918 internal
+            - 172.16.0.0/12
+            - 192.168.0.0/16
+      - name: allow-loopback
+        action: Allow
+        principal:
+          clientCIDRs:
+            - 127.0.0.0/8                 # for the kubectl port-forward case
+                                          # without an XFF header set
+
+  # ------------------------------------------------------------------ #
+  # 3. Basic auth — htpasswd-format Secret.
+  # ------------------------------------------------------------------ #
+  basicAuth:
+    users:
+      name: basic-auth-creds              # Secret with `.htpasswd` key
