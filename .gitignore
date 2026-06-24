@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local working notes — kept out of the public repo.
+PROGRESS.md

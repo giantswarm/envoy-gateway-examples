@@ -1,0 +1,47 @@
+services:
+  hello:
+    build: ../../apps/helloworld
+    environment: { NAME: hello }
+    expose: ["8080"]
+
+  redis:
+    image: redis:7-alpine
+    expose: ["6379"]
+
+  # The Lyft/Envoy global rate-limit service. Talks gRPC to Envoy, counts
+  # in Redis, reads policy from /data/ratelimit/config/*.yaml.
+  #
+  # NOTE: envoyproxy/ratelimit publishes only `master` and git-SHA tags
+  # (no semver). For reproducibility pin to a SHA from
+  # https://hub.docker.com/r/envoyproxy/ratelimit/tags, e.g.
+  #   image: envoyproxy/ratelimit:6f5de117
+  # `master` is acceptable for the tutorial but will drift over time.
+  ratelimit:
+    image: envoyproxy/ratelimit:master
+    environment:
+      USE_STATSD: "false"
+      LOG_LEVEL: info
+      REDIS_SOCKET_TYPE: tcp
+      REDIS_URL: redis:6379
+      RUNTIME_ROOT: /data
+      RUNTIME_SUBDIRECTORY: ratelimit
+      RUNTIME_WATCH_ROOT: "false"
+      RUNTIME_IGNOREDOTFILES: "true"
+      GRPC_PORT: "8081"
+    expose: ["8081"]
+    volumes:
+      - ./ratelimit-config:/data/ratelimit/config:ro
+    depends_on:
+      - redis
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info", "--concurrency", "1"]
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    depends_on:
+      - hello
+      - ratelimit

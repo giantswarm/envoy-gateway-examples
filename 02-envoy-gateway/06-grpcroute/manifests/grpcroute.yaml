@@ -1,0 +1,65 @@
+---
+# GRPCRoute — the gRPC analogue of HTTPRoute.
+#
+# Match grammar is gRPC-shaped, not HTTP-shaped:
+#   matches:
+#     - method:
+#         type: Exact | RegularExpression           (default Exact)
+#         service: hello.HelloService               (fully-qualified)
+#         method:  SayHello                         (optional — omit to match all methods on the service)
+#       headers:
+#         - { name, type: Exact|RegularExpression, value }
+#
+# Filters: RequestHeaderModifier, ResponseHeaderModifier,
+# RequestMirror, ExtensionRef. NO URLRewrite (gRPC paths are
+# service/method tuples, not URLs you'd rewrite).
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpcbin
+  namespace: grpc-demo
+spec:
+  parentRefs:
+    - name: rpc
+
+  rules:
+    # ---- Rule 1: everything in hello.HelloService -> grpcbin ------ #
+    - matches:
+        - method:
+            service: hello.HelloService
+      backendRefs:
+        - name: grpcbin
+          port: 9000        # Service port — same rule as HTTPRoute
+
+    # ---- Rule 2: ONE specific method on grpcbin.GRPCBin ----------- #
+    # Demonstrates method-level matching + per-rule header injection.
+    - matches:
+        - method:
+            service: grpcbin.GRPCBin
+            method: DummyUnary
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-eg-tagged
+                value: dummy-unary
+      backendRefs:
+        - name: grpcbin
+          port: 9000
+
+    # ---- Rule 3: the rest of grpcbin.GRPCBin (Empty, errors, etc.) #
+    # By omitting `method:` we match every method on the service.
+    - matches:
+        - method:
+            service: grpcbin.GRPCBin
+      backendRefs:
+        - name: grpcbin
+          port: 9000
+
+    # ---- Rule 4: reflection — needed so `grpcurl list` works ----- #
+    - matches:
+        - method:
+            service: grpc.reflection.v1alpha.ServerReflection
+      backendRefs:
+        - name: grpcbin
+          port: 9000

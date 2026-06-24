@@ -1,0 +1,89 @@
+# --------------------------------------------------------------------------- #
+# 15 — Wasm filter
+#
+# Envoy's wasm support lets you write request-path filters in any language
+# that compiles to Wasm (Rust, Go via TinyGo, AssemblyScript, C++ via
+# proxy-wasm-cpp-sdk). The filter runs inside a V8 sandbox in the Envoy
+# process, so the blast radius of a crash is contained.
+#
+# Our filter (filter/src/lib.rs):
+#   - Reads x-wasm-block on the request; if present, returns 403.
+#   - Adds x-wasm-filter: hello-from-wasm to every response.
+#
+# Loaded via the envoy.filters.http.wasm HTTP filter, referencing a
+# .wasm file on disk (mounted into the container by docker-compose).
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+
+                  # --------------------------------------------------- #
+                  # Wasm HTTP filter.
+                  #
+                  # `vm_config.runtime` picks the Wasm runtime. Envoy
+                  # ships with envoy.wasm.runtime.v8 (V8). Other
+                  # builds support `wamr` (WAMR), `wasmtime`, `wasmedge`.
+                  # `null` is a special "no sandbox" mode used for
+                  # debugging — runs the compiled filter as a native
+                  # extension. Never use in production.
+                  # --------------------------------------------------- #
+                  - name: envoy.filters.http.wasm
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+                      config:
+                        name: hello_wasm           # appears in stats: wasm.hello_wasm.*
+                        # root_id is the identifier the filter's
+                        # set_http_context callback uses; matches the
+                        # `vm_id` in stats. Optional.
+                        vm_config:
+                          runtime: envoy.wasm.runtime.v8
+                          code:
+                            local:
+                              # Built by `make build-wasm`. Bind-mounted
+                              # at the path below from
+                              # filter/target/wasm32-wasip1/release/
+                              # hello_wasm.wasm.
+                              filename: /etc/envoy/wasm/filter.wasm
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: wasm_demo
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/echo"
+
+  clusters:
+    - name: hello_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: hello, port_value: 8080 } } }

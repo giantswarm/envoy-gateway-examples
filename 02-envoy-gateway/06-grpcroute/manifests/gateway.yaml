@@ -1,0 +1,26 @@
+---
+# Same shape as the HTTPRoute Gateway from example 01 — listener
+# protocol stays HTTP. EG figures out HTTP/2 once it sees a
+# GRPCRoute attached: Envoy's HCM enables `http2_protocol_options`
+# on the listener, and the upstream cluster uses HTTP/2 because the
+# backend Service has `appProtocol: kubernetes.io/h2c` (see
+# grpcbin.yaml).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: rpc
+  namespace: grpc-demo
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: grpc
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        kinds:
+          # Restrict to GRPCRoute. Default is HTTPRoute — without this
+          # an HTTPRoute could also attach. Useful for "gRPC-only"
+          # Gateways.
+          - kind: GRPCRoute
+        namespaces:
+          from: Same

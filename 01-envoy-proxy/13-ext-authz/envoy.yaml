@@ -1,0 +1,147 @@
+# --------------------------------------------------------------------------- #
+# 13 — External authorization
+#
+# Envoy's ext_authz filter calls an external service on every request and
+# uses the response (allow / deny + optional headers) to gate the request.
+# This is where real "policy" lives — JWT validation (example 12) decides
+# WHO the caller is; ext-authz decides WHAT they're allowed to do.
+#
+# Two transports are supported:
+#   - HTTP (this example) — simpler to write, but no streaming, no body.
+#   - gRPC — the canonical interface; supports request body forwarding and
+#     a richer response. See the exercise at the end.
+#
+# Routes:
+#   /public      — opts out of ext-authz entirely (per-route disable)
+#   /protected   — requires any x-user-id
+#   /admin       — requires x-user-role: admin
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+
+                  # --------------------------------------------------- #
+                  # ext_authz filter (HTTP variant). Applies to ALL
+                  # routes by default; /public opts out per-route.
+                  # --------------------------------------------------- #
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      http_service:
+                        server_uri:
+                          uri: http://authz:8000
+                          cluster: authz_cluster
+                          timeout: 0.5s
+
+                        # Envoy forwards :method, :path, :authority, and
+                        # x-request-id by default. To let the authz
+                        # service see other headers (e.g. the ones our
+                        # policy reads), declare them here.
+                        authorization_request:
+                          allowed_headers:
+                            patterns:
+                              - exact: x-user-id
+                              - exact: x-user-role
+
+                        authorization_response:
+                          # Headers the authz response can SET on the
+                          # request (so the backend sees them). Without
+                          # this list, response headers are dropped.
+                          allowed_upstream_headers:
+                            patterns:
+                              - exact: x-authz-decision
+
+                          # Headers the authz response can ADD to a
+                          # DENIED response (visible to the client).
+                          allowed_client_headers:
+                            patterns:
+                              - exact: x-authz-reason
+
+                      # If authz is down / timing out, refuse traffic.
+                      # `true` (fail-open) lets it through — only use
+                      # for low-risk authz where availability beats
+                      # correctness.
+                      failure_mode_allow: false
+
+                      # Don't forward the request body to authz (default
+                      # is omitted entirely). Set
+                      # `with_request_body: { max_request_bytes: N }`
+                      # to include up to N bytes — useful for OPA-style
+                      # body inspection.
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: ext_authz_demo
+                  virtual_hosts:
+                    - name: ext_authz_demo
+                      domains: ["*"]
+                      routes:
+
+                        # /public skips ext-authz entirely. Useful for
+                        # healthz, public docs, etc.
+                        - match: { path: "/public" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+
+                        # Route to /echo on the backend so the response
+                        # body shows the x-authz-decision header.
+                        - match: { prefix: "/protected" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/echo"
+
+                        - match: { prefix: "/admin" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/echo"
+
+  clusters:
+    - name: hello_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: hello, port_value: 8080 } } }
+
+    - name: authz_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: authz_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint: { address: { socket_address: { address: authz, port_value: 8000 } } }

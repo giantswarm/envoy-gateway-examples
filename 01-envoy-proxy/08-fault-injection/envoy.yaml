@@ -1,0 +1,172 @@
+# --------------------------------------------------------------------------- #
+# 08 — Fault injection
+#
+# Examples 04–07 made the cluster honest. This one makes it *dishonest*
+# on demand, so you can verify that the timeouts, retries, circuit
+# breakers, and (later) ext-authz/auth filters actually behave the way
+# you think they do under failure.
+#
+# The HTTP fault filter (envoy.filters.http.fault) lives in the HCM
+# filter chain. We install it globally with an EMPTY config (so the
+# default behavior is passthrough) and then opt in per-route via
+# typed_per_filter_config.
+#
+# Routes:
+#   /normal       — control: no fault, fast 200.
+#   /delay        — fixed 2s delay, 100% of requests.
+#   /abort-100    — abort with 503, 100% of requests.
+#   /abort-25     — abort with 503, 25% of requests (probabilistic).
+#   /header       — client controls fault via x-envoy-fault-* headers.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                # Filter chain. ORDER MATTERS — `fault` must come before
+                # `router` (the terminal filter). Filters are evaluated
+                # top-down on the request path; the router dispatches the
+                # request to the upstream, and once it has done that no
+                # further request-side filter can run.
+                http_filters:
+                  - name: envoy.filters.http.fault
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+                      # Empty global config -> passthrough. Routes opt in
+                      # via typed_per_filter_config below.
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: fault_demo
+                      domains: ["*"]
+                      routes:
+
+                        # ------------------------------------------------- #
+                        # /normal — no fault, baseline
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/normal" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        # ------------------------------------------------- #
+                        # /delay — fixed 2s delay, every request
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/delay" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.fault:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+                              delay:
+                                fixed_delay: 2s
+                                percentage:
+                                  # numerator / denominator together set
+                                  # the probability. HUNDRED -> "% of 100".
+                                  # MILLION is also available for very low
+                                  # rates (e.g. 1 / 1,000,000 = 0.0001%).
+                                  numerator: 100
+                                  denominator: HUNDRED
+
+                        # ------------------------------------------------- #
+                        # /abort-100 — abort every request with 503
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/abort-100" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.fault:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+                              abort:
+                                http_status: 503
+                                percentage:
+                                  numerator: 100
+                                  denominator: HUNDRED
+
+                        # ------------------------------------------------- #
+                        # /abort-25 — abort 25% of requests with 503
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/abort-25" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.fault:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+                              abort:
+                                http_status: 503
+                                percentage:
+                                  numerator: 25
+                                  denominator: HUNDRED
+
+                        # ------------------------------------------------- #
+                        # /header — client-driven faults
+                        #
+                        # Recognised request headers (clients set these):
+                        #   x-envoy-fault-delay-request: <milliseconds>
+                        #   x-envoy-fault-abort-request: <http-status>
+                        #
+                        # `percentage: 100/HUNDRED` means "always honor the
+                        # header when present". Lower it to apply the
+                        # header-driven fault only some of the time.
+                        # ------------------------------------------------- #
+                        - match: { prefix: "/header" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.fault:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+                              delay:
+                                header_delay: {}
+                                percentage:
+                                  numerator: 100
+                                  denominator: HUNDRED
+                              abort:
+                                header_abort: {}
+                                percentage:
+                                  numerator: 100
+                                  denominator: HUNDRED
+
+  clusters:
+    - name: hello_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: hello, port_value: 8080 }

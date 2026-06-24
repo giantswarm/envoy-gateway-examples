@@ -1,0 +1,26 @@
+---
+# A Gateway is "what's bound to what address/port, and what TLS / ALPN
+# settings come with it". Envoy Gateway uses each Gateway to produce a
+# matching Envoy Deployment in envoy-gateway-system.
+#
+# `gatewayClassName: eg` references the GatewayClass that Envoy Gateway
+# auto-creates when its helm chart is installed. You can list it with:
+#   kubectl get gatewayclass eg
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: eg
+  namespace: demo
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Routes are explicit opt-in: an HTTPRoute must list this Gateway
+      # in parentRefs AND live in a namespace allowed here. `Same` only
+      # accepts routes from the Gateway's own namespace. Other options:
+      # `All`, or `Selector` + a namespace label match.
+      allowedRoutes:
+        namespaces:
+          from: Same

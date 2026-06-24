@@ -1,0 +1,44 @@
+---
+# One Gateway, three listeners — one per L4 protocol Gateway API
+# supports natively. EG will provision a single Envoy data plane
+# with three Envoy listeners bound to the corresponding ports.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: l4
+  namespace: l4-demo
+spec:
+  gatewayClassName: eg
+
+  listeners:
+    # --- TCP listener — accepts opaque TCP, no L7 parsing -------------- #
+    - name: tcp
+      port: 9001
+      protocol: TCP
+      allowedRoutes:
+        kinds:
+          - kind: TCPRoute
+
+    # --- UDP listener — accepts UDP packets ---------------------------- #
+    # UDP is connectionless; "routes" here are essentially "forward
+    # to this backend Service". Envoy's UDP proxy filter does the work.
+    - name: udp
+      port: 5353
+      protocol: UDP
+      allowedRoutes:
+        kinds:
+          - kind: UDPRoute
+
+    # --- TLS-passthrough listener — peek at SNI, forward TLS untouched - #
+    # `tls.mode: Passthrough` -> NO certificateRefs (the backend has
+    # the cert). EG configures Envoy with tls_inspector + a TCP proxy
+    # filter gated on SNI.
+    - name: tls
+      port: 8443
+      protocol: TLS
+      hostname: tls.local                  # SNI matcher
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        kinds:
+          - kind: TLSRoute

@@ -1,0 +1,20 @@
+services:
+  hello:
+    build: ../../apps/helloworld
+    environment: { NAME: hello }
+    expose: ["8080"]
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+      # The built .wasm file lives at:
+      #   filter/target/wasm32-wasip1/release/hello_wasm.wasm
+      # `make build-wasm` produces it on first `make up`.
+      - ./filter/target/wasm32-wasip1/release/hello_wasm.wasm:/etc/envoy/wasm/filter.wasm:ro
+    depends_on:
+      - hello

@@ -1,0 +1,30 @@
+.PHONY: up verify reload down logs authz-logs kill-authz heal-authz
+
+REPO_ROOT := $(shell git rev-parse --show-toplevel)
+PORTS     := 10000 9901
+
+up:
+	@$(REPO_ROOT)/scripts/free-ports $(PORTS)
+	docker compose up -d --build
+
+reload:
+	docker compose restart envoy
+
+verify:
+	./verify.sh
+
+logs:
+	docker compose logs -f envoy
+
+authz-logs:
+	docker compose logs -f authz
+
+# Convenience for the failure_mode_allow exercise.
+kill-authz:
+	docker compose stop authz
+
+heal-authz:
+	docker compose start authz
+
+down:
+	docker compose down

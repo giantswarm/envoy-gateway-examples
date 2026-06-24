@@ -1,0 +1,134 @@
+---
+# Six rules side-by-side. Rules within an HTTPRoute are evaluated
+# left-to-right; an explicit `matches` list inside one rule is OR-ed.
+#
+# Mapping to Phase 1 example 03's seven envoy.yaml routes:
+#   #1 (exact path + direct_response) — NOT achievable with vanilla
+#       Gateway API (no first-class "fixed response"). See exercises.
+#   #2 (prefix + prefix_rewrite "/") -> URLRewrite ReplacePrefixMatch
+#   #3 (prefix + redirect)            -> RequestRedirect
+#   #4 (header-gated route)           -> matches[].headers
+#   #5 (route order — falls through)   -> rule order determines fallback
+#   #6 (query param + header inject)  -> matches[].queryParams + RequestHeaderModifier
+#   #7 (catch-all)                     -> matches[].path PathPrefix /
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: routing
+  namespace: demo
+spec:
+  parentRefs:
+    - name: routing
+  rules:
+
+    # ----- Rule 1 — PREFIX REWRITE ----- #
+    # /api/v1/echo -> backend /echo
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              # ReplacePrefixMatch swaps the matched prefix; ReplaceFullPath
+              # replaces the entire path. Subset of Envoy's
+              # prefix_rewrite / regex_rewrite (no capture-group rewrite
+              # at vanilla Gateway API level — that's HTTPRouteFilter or
+              # EnvoyPatchPolicy).
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: helloworld
+          port: 8080
+
+    # ----- Rule 2 — 301 REDIRECT ----- #
+    # /legacy/anything -> 301 Location: /api/v1
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /legacy
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            statusCode: 301
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /api/v1
+      # backendRefs must be empty when the only filter is a redirect.
+
+    # ----- Rule 3 — HEADER-GATED ROUTE ----- #
+    # /admin/* AND x-api-key: hunter2 -> backend /echo
+    # Without the header, this rule doesn't match and we fall through
+    # to the catch-all below. (No "deny" in vanilla Gateway API — use
+    # SecurityPolicy or ext-authz for that; see example 16.)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /admin
+          headers:
+            - name: x-api-key
+              type: Exact     # or RegularExpression
+              value: hunter2
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /echo
+      backendRefs:
+        - name: helloworld
+          port: 8080
+
+    # ----- Rule 4 — QUERY PARAM MATCH + HEADER INJECTION ----- #
+    # /q?debug=true -> backend /echo, with x-debug: on added
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /q
+          queryParams:
+            - name: debug
+              type: Exact
+              value: "true"
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /echo
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            # `add` appends; `set` overwrites; `remove` strips.
+            set:
+              - name: x-debug
+                value: on
+      backendRefs:
+        - name: helloworld
+          port: 8080
+
+    # ----- Rule 5 — REGEX MATCH ----- #
+    # /users/<digits> -> backend /echo
+    - matches:
+        - path:
+            type: RegularExpression
+            # The path must match this RE2 expression in full.
+            value: "/users/[0-9]+"
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /echo
+      backendRefs:
+        - name: helloworld
+          port: 8080
+
+    # ----- Rule 6 — CATCH-ALL ----- #
+    # Anything we didn't match above goes here, unrewritten.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: helloworld
+          port: 8080

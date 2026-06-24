@@ -1,0 +1,24 @@
+---
+# Route attached SPECIFICALLY to the hello listener via sectionName.
+# Without sectionName, the route would attach to every listener whose
+# allowedRoutes accept it — usually fine, but here we want to demo
+# per-SNI routing explicitly.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hello
+  namespace: demo
+spec:
+  parentRefs:
+    - name: secure
+      sectionName: https-hello       # binds to listener name in gateway.yaml
+  hostnames:
+    - hello.local                    # belt-and-braces: also filter at the route level
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: helloworld
+          port: 8080                 # Service port (see 00-kind-bootstrap)

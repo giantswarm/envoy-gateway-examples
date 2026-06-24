@@ -1,0 +1,7 @@
+---
+# Where the Gateway + HTTPRoute live. The cert Secret + the
+# helloworld backend are in `demo` (set up by 00-kind-bootstrap).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps

@@ -1,0 +1,149 @@
+# --------------------------------------------------------------------------- #
+# 10 — Local rate limiting
+#
+# The local_ratelimit HTTP filter — token bucket maintained IN-PROCESS by
+# each Envoy worker. No external service required. Per-route opt-in via
+# typed_per_filter_config, same pattern as example 08 (fault injection).
+#
+# Three routes:
+#   /free            — no rate limit, control
+#   /limited         — 5 tokens, 1 token/s refill, default 429 response
+#   /limited-custom  — same bucket; custom 503 + retry-after + extra header
+#
+# Important caveat: each Envoy WORKER has its own bucket. If you start
+# Envoy with `--concurrency 4` and configure max_tokens=5, the cluster-
+# wide effective rate is 5 × 4 = 20 tokens. For sub-process-shared limits
+# you want the GLOBAL rate limit service (example 11).
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_http
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+
+                  # Filter installed globally with NO token_bucket -> the
+                  # filter does nothing by default. Routes that want a
+                  # limit override the config via typed_per_filter_config.
+                  - name: envoy.filters.http.local_ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                      stat_prefix: rl_default
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: rl_demo
+                      domains: ["*"]
+                      routes:
+
+                        # --------------------------------------------- #
+                        # /free — no opt-in, no limit
+                        # --------------------------------------------- #
+                        - match: { path: "/free" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+
+                        # --------------------------------------------- #
+                        # /limited — vanilla local rate limit
+                        #
+                        # token_bucket:
+                        #   start full at max_tokens=5
+                        #   add tokens_per_fill=1 every fill_interval=1s
+                        # filter_enabled is the SAMPLE rate — % of requests
+                        # that even go through the filter logic.
+                        # filter_enforced is the ENFORCE rate — of those,
+                        # what fraction actually get blocked when over
+                        # the limit. Set enabled=100/enforced=0 to run
+                        # in "observe only" mode for canarying.
+                        # --------------------------------------------- #
+                        - match: { path: "/limited" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.local_ratelimit:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                              stat_prefix: limited
+                              token_bucket:
+                                max_tokens: 5
+                                tokens_per_fill: 1
+                                fill_interval: 1s
+                              filter_enabled:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                              filter_enforced:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                              # If true, Envoy adds an x-ratelimit-* header
+                              # to every response (allowed and denied) so
+                              # clients can see how close they are.
+                              enable_x_ratelimit_headers: DRAFT_VERSION_03
+
+                        # --------------------------------------------- #
+                        # /limited-custom — custom over-limit response
+                        # --------------------------------------------- #
+                        - match: { path: "/limited-custom" }
+                          route:
+                            cluster: hello_cluster
+                            regex_rewrite:
+                              pattern: { regex: ".*" }
+                              substitution: "/"
+                          typed_per_filter_config:
+                            envoy.filters.http.local_ratelimit:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                              stat_prefix: limited_custom
+                              token_bucket:
+                                max_tokens: 5
+                                tokens_per_fill: 1
+                                fill_interval: 1s
+                              filter_enabled:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                              filter_enforced:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                              # Custom HTTP status on over-limit (default
+                              # is 429). Use 503 here only for demo —
+                              # 429 is more correct semantically.
+                              status:
+                                code: ServiceUnavailable
+                              # Headers to attach to the over-limit
+                              # response.
+                              response_headers_to_add:
+                                - header:
+                                    key: x-rate-limit-policy
+                                    value: "5 per second per envoy worker"
+                                - header:
+                                    key: retry-after
+                                    value: "1"
+
+  clusters:
+    - name: hello_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: hello, port_value: 8080 }

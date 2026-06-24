@@ -1,0 +1,116 @@
+# --------------------------------------------------------------------------- #
+# Envoy bootstrap config: the smallest useful one.
+#
+# It defines three things:
+#   1. an admin endpoint (so we can introspect Envoy at runtime)
+#   2. a listener  — what Envoy accepts on the wire
+#   3. a cluster   — where Envoy forwards requests to
+#
+# The arrow of a request through this file is:
+#   listener_http  ->  http_connection_manager
+#                  ->  router  ->  route_config  ->  cluster
+#                  ->  cluster helloworld_cluster
+#                  ->  endpoint helloworld:8080
+# --------------------------------------------------------------------------- #
+
+admin:
+  # The admin endpoint exposes /config_dump, /clusters, /stats, /listeners,
+  # /ready, etc. It's invaluable for debugging and we'll explore it fully in
+  # example 02. Bind to 0.0.0.0 so we can reach it from the host.
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+
+static_resources:
+  # ------------------------------------------------------------------------- #
+  # LISTENERS
+  #
+  # A listener accepts connections on an address + port. Each listener has
+  # one or more "filter chains"; filters process the bytes/frames as they
+  # flow through. For HTTP, the key filter is the HTTP Connection Manager
+  # (HCM) — it parses HTTP and exposes a routing layer.
+  # ------------------------------------------------------------------------- #
+  listeners:
+    - name: listener_http
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 10000
+
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http          # prefix for /stats counters
+
+                # Access log to stdout so `docker compose logs envoy` shows
+                # one line per request. We'll customise this in example 17.
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                # HTTP filters run in order, top to bottom. The Router filter
+                # MUST be last — it's the terminal filter that actually
+                # dispatches the request to the upstream cluster.
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                # The route table. A virtual host matches incoming requests by
+                # the :authority / Host header (here: all of them via "*"),
+                # then routes by path. With only one route, every request
+                # goes to one cluster.
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: local_service
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/hi"
+                          route:
+                            cluster: helloworld_cluster
+                            prefix_rewrite: "/"
+                        - match:
+                            prefix: "/direct"
+                          direct_response:
+                            status: 200
+                            body:
+                              inline_string: "direct message"
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: helloworld_cluster
+
+  # ------------------------------------------------------------------------- #
+  # CLUSTERS
+  #
+  # A cluster is "a logical group of upstream hosts that accept traffic from
+  # Envoy". The cluster definition says how to find those hosts and how to
+  # balance across them.
+  #
+  # type: STRICT_DNS
+  #   Envoy resolves the hostname via DNS and uses every returned A/AAAA
+  #   record as an endpoint. Re-resolves periodically. Perfect for Docker
+  #   Compose where "helloworld" is the service name.
+  #
+  # lb_policy: ROUND_ROBIN
+  #   With a single endpoint it doesn't matter, but it's the natural default.
+  # ------------------------------------------------------------------------- #
+  clusters:
+    - name: helloworld_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: helloworld_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: helloworld
+                      port_value: 8080
