@@ -1,0 +1,55 @@
+---
+# SecurityPolicy with JWT validation.
+#
+# This file is a TEMPLATE. The `__JWKS_INLINE__` placeholder is
+# replaced by `make up` with the contents of keys/jwks.json (a
+# one-line JSON object produced by gen-keys.sh). Don't `kubectl
+# apply` this file directly — apply the rendered version (the
+# Makefile takes care of it).
+#
+# Attachment: targetRefs accepts Gateway, HTTPRoute, GRPCRoute,
+# TCPRoute, UDPRoute, TLSRoute. Same-namespace.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: jwt-protect
+  namespace: demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: jwt-protect
+
+  # `jwt:` configures the envoy.filters.http.jwt_authn HTTP filter.
+  # Without a valid token, requests get 401 Unauthorized (before
+  # ever reaching the backend).
+  jwt:
+    providers:
+      - name: tutorial-issuer
+        # `issuer:` must match the `iss` claim in the token.
+        issuer: https://tutorial-issuer.example.com
+
+        # `audiences:` is the set of allowed `aud` claims. The token
+        # must contain at least one of these. Single-value example
+        # — Envoy accepts a list too.
+        audiences:
+          - api.local
+
+        # `localJWKS:` inlines the JWKS material into the policy.
+        # Alternative: `remoteJWKS.uri` to fetch from the issuer's
+        # well-known endpoint (auto-refresh; production default).
+        localJWKS:
+          inline: '__JWKS_INLINE__'
+
+        # Extract claims out of validated tokens and put them on
+        # request headers sent to the backend. After validation the
+        # upstream sees `x-user: <sub-value>`.
+        claimToHeaders:
+          - claim: sub
+            header: x-user
+          - claim: aud
+            header: x-aud
+
+        # `recomputeRoute: true` would re-run the HTTPRoute matcher
+        # after claim extraction (useful if you want claim-based
+        # routing). Off by default; we don't need it here.

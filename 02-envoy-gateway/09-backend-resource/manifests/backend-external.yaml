@@ -1,0 +1,18 @@
+---
+# Backend CR — Envoy Gateway's escape hatch for routing to targets
+# that don't have a K8s Service.
+#
+# This one points at `example.com:80` — a fully external, non-K8s
+# endpoint. EG translates the Backend into an Envoy STRICT_DNS
+# cluster that resolves the hostname periodically (no EDS, because
+# there are no K8s endpoints to discover).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: example-com
+  namespace: backend-demo
+spec:
+  endpoints:
+    - fqdn:
+        hostname: example.com
+        port: 80

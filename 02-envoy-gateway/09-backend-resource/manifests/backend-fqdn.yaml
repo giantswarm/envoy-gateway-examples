@@ -1,0 +1,21 @@
+---
+# Backend pointing at an IN-CLUSTER FQDN. Reaches the same backend
+# example 01 talks to, but via DNS resolution rather than the
+# kubernetes Service selector machinery (EDS).
+#
+# Why would you do this?
+#   - Cross-namespace without a ReferenceGrant (Backend FQDN bypasses
+#     the cross-ns guard that applies to Service refs).
+#   - Routing to a name that resolves outside K8s but inside the
+#     cluster network (e.g. a CoreDNS-stub-zone-served vault server).
+#   - Testing a service before it has K8s manifests.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: helloworld-fqdn
+  namespace: backend-demo
+spec:
+  endpoints:
+    - fqdn:
+        hostname: helloworld.demo.svc.cluster.local
+        port: 8080

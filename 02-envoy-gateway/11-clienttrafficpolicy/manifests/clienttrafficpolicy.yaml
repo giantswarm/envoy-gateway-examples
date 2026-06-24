@@ -1,0 +1,79 @@
+---
+# ClientTrafficPolicy — EG-specific knobs for how Envoy treats the
+# client side of the conversation.
+#
+# Attaches via targetRefs[]. Choices:
+#   - Gateway   -> applies to every listener on that Gateway
+#   - Gateway + sectionName=<listener-name>  -> just that listener
+#
+# One CTP per (Gateway, listener) target. A second one targeting the
+# same slot ends up Conflicted=True.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: tuned-client-policy
+  namespace: demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: tuned-client
+
+  # ------------------------------------------------------------------ #
+  # 1. Client IP detection
+  # ------------------------------------------------------------------ #
+  # Tells Envoy to trust the last `numTrustedHops` entries of the
+  # incoming `X-Forwarded-For` header. The backend then receives an
+  # XFF where the "real" client IP is correctly attributed, AND
+  # Envoy's own access log records that IP as the downstream remote
+  # address.
+  #
+  # Use 1 when there's ONE proxy (e.g. an L4 LB or CDN) in front of
+  # this Gateway. Use 2+ if there's another layer. Don't enable this
+  # if the Gateway is directly internet-facing — clients can lie.
+  clientIPDetection:
+    xForwardedFor:
+      numTrustedHops: 1
+
+  # ------------------------------------------------------------------ #
+  # 2. HTTP/1 header case preservation
+  # ------------------------------------------------------------------ #
+  # By default Envoy normalizes HTTP/1 header names to lowercase. Some
+  # legacy backends are case-sensitive and break. Enable this and
+  # Envoy forwards header names as the client sent them.
+  http1:
+    preserveHeaderCase: true
+
+  # ------------------------------------------------------------------ #
+  # 3. Path handling
+  # ------------------------------------------------------------------ #
+  # By default Envoy merges consecutive slashes in the path
+  # (`/a//b` -> `/a/b`) BEFORE route matching. Some applications
+  # treat double-slashes as significant. Disable the merge and the
+  # path is forwarded verbatim.
+  path:
+    disableMergeSlashes: true
+    # `escapedSlashesAction: KeepUnchanged` keeps %2F encoded; default
+    # is to reject (per RFC 3986 strict mode). Leave default unless
+    # your app demands literal encoded slashes.
+    # escapedSlashesAction: KeepUnchanged
+
+  # Other useful knobs (commented out — drop in as needed):
+  #
+  # enableProxyProtocol: true        # accept PROXY protocol v1/v2 from
+  #                                  #   the L4 LB in front
+  # tls:                             # TLS knobs for HTTPS listeners
+  #   minVersion: TLSv1.3
+  #   ciphers: [...]
+  #   clientValidation:              # downstream mTLS
+  #     caCertificateRefs: [...]
+  # http2:
+  #   maxConcurrentStreams: 100
+  #   onInvalidMessage: TerminateConnection
+  # timeout:
+  #   tcp:
+  #     idleTimeout: 5m
+  #   http:
+  #     requestReceivedTimeout: 30s
+  # connection:
+  #   bufferLimit: 32Ki

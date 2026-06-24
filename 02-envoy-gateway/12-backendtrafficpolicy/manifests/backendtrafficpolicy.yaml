@@ -1,0 +1,114 @@
+---
+# BackendTrafficPolicy — knobs for how Envoy talks to the upstream.
+#
+# Attaches to one (or more) Service / Backend / route target. Maps
+# directly to the features Phase 1 examples 04-07 covered in raw
+# Envoy YAML:
+#
+#   retry           -> route_config.routes[].route.retry_policy
+#   timeout         -> route_config.routes[].route.timeout
+#   loadBalancer    -> cluster.lb_policy
+#   healthCheck.active   -> cluster.health_checks[]
+#   healthCheck.passive  -> cluster.outlier_detection
+#   circuitBreaker  -> cluster.circuit_breakers
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: tuned-backend-policy
+  namespace: demo
+spec:
+  # BTP attaches to GATEWAY-API resources, NOT to Services. Valid
+  # kinds: Gateway, HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute.
+  # (BackendTLSPolicy is the one that attaches to a Service — easy
+  # mix-up between the two CRs.)
+  #
+  # Here we attach to the HTTPRoute so the policy applies to every
+  # request flowing through that route.
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: tuned-backend
+
+  # ------------------------------------------------------------------ #
+  # 1. Retry — re-issue the same request to a (probably different)
+  #    upstream endpoint when certain failures happen.
+  # ------------------------------------------------------------------ #
+  retry:
+    numRetries: 3
+    retryOn:
+      # Status codes that trigger a retry.
+      httpStatusCodes:
+        - 503
+      # Connection-level triggers (Envoy-specific).
+      triggers:
+        - connect-failure
+        - reset
+        - retriable-status-codes        # needed if you set httpStatusCodes above
+    perRetry:
+      timeout: 1s                       # per-attempt deadline
+      backOff:
+        baseInterval: 100ms
+        maxInterval: 1s
+
+  # ------------------------------------------------------------------ #
+  # 2. Timeout — client-visible deadline for the whole request.
+  # ------------------------------------------------------------------ #
+  timeout:
+    http:
+      requestTimeout: 2s
+      # connectionIdleTimeout: 1h
+      # maxConnectionDuration: 0s    # 0 = unlimited
+    # tcp:
+    #   connectTimeout: 5s
+
+  # ------------------------------------------------------------------ #
+  # 3. Load balancing — distribution policy across endpoints.
+  # ------------------------------------------------------------------ #
+  loadBalancer:
+    type: LeastRequest                 # alt: RoundRobin, Random, ConsistentHash
+    # consistentHash:
+    #   type: Header
+    #   header:
+    #     name: x-user-id
+
+  # ------------------------------------------------------------------ #
+  # 4. Active health check — Envoy probes each endpoint on a schedule.
+  # ------------------------------------------------------------------ #
+  healthCheck:
+    active:
+      type: HTTP
+      timeout: 1s
+      interval: 5s
+      unhealthyThreshold: 3            # consecutive failed probes -> mark unhealthy
+      healthyThreshold: 2              # consecutive ok probes     -> mark healthy
+      http:
+        path: /
+        expectedStatuses:
+          - 200
+
+    # ---------------------------------------------------------------- #
+    # 5. Passive health check (outlier detection) — eject endpoints
+    #    that return errors during real traffic, without probing.
+    # ---------------------------------------------------------------- #
+    passive:
+      consecutive5XxErrors: 3
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+
+  # ------------------------------------------------------------------ #
+  # 6. Circuit breaker (shown via /config_dump only). Default values
+  #    EG uses are generous; uncomment to tune.
+  # ------------------------------------------------------------------ #
+  # circuitBreaker:
+  #   maxConnections: 1024
+  #   maxPendingRequests: 1024
+  #   maxParallelRequests: 1024
+  #   maxParallelRetries: 3
+
+  # ------------------------------------------------------------------ #
+  # Other BTP knobs (not exercised here):
+  #   proxyProtocol.version          (when speaking PROXY to upstream)
+  #   faultInjection.delay / .abort  (chaos testing; mirrors Phase 1 ex 08)
+  #   dns.dnsRefreshRate             (only for STRICT_DNS backends)
+  #   compression.type               (gzip/brotli on responses)

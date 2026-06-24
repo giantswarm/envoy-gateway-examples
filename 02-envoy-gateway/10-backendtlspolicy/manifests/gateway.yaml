@@ -1,0 +1,15 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: secure-up
+  namespace: tls-upstream-demo
+spec:
+  gatewayClassName: eg
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP                 # client side stays plaintext on purpose
+      allowedRoutes:                 # — see README for why.
+        namespaces:
+          from: Same
