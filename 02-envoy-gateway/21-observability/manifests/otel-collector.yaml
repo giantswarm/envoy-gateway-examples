@@ -1,0 +1,95 @@
+---
+# Minimal OpenTelemetry Collector. Receives traces over OTLP gRPC
+# on 4317, OTLP HTTP on 4318. Exports traces to STDOUT via the
+# `debug` exporter so we can `kubectl logs` to see them.
+#
+# Production usually runs the contrib collector + exporters to a
+# real backend (Jaeger, Tempo, Honeycomb, Datadog). This config is
+# a one-step setup for tutorials.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-config
+  namespace: demo
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 1s
+
+    exporters:
+      debug:
+        verbosity: detailed
+
+    service:
+      pipelines:
+        traces:
+          receivers:  [otlp]
+          processors: [batch]
+          exporters:  [debug]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: demo
+  labels:
+    app: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel
+          image: docker.io/otel/opentelemetry-collector:0.103.1
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - { containerPort: 4317, name: otlp-grpc }
+            - { containerPort: 4318, name: otlp-http }
+          volumeMounts:
+            - name: cfg
+              mountPath: /etc/otel
+              readOnly: true
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 256Mi }
+      volumes:
+        - name: cfg
+          configMap:
+            name: otel-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: demo
+spec:
+  type: ClusterIP
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      # OTLP gRPC is HTTP/2. Telling EG that here means we don't
+      # need a separate BackendTLSPolicy / appProtocol gymnastics.
+      appProtocol: kubernetes.io/h2c
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http

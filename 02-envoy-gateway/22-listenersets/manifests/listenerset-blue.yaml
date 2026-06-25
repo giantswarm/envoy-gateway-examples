@@ -1,0 +1,37 @@
+---
+# XListenerSet — team-blue contributes a listener (and ONLY a
+# listener) to the shared Gateway, owned by the platform team.
+#
+# This is Gateway API's answer to "we want one Envoy data plane for
+# the cluster, but multiple teams want to add their own
+# ports/hostnames without filing a ticket against the Gateway
+# resource".
+#
+# Resource is in `gateway.networking.x-k8s.io/v1alpha1` (experimental
+# channel). The bootstrap installs the experimental Gateway API
+# CRDs, so `xlistenersets.gateway.networking.x-k8s.io` is present.
+apiVersion: gateway.networking.x-k8s.io/v1alpha1
+kind: XListenerSet
+metadata:
+  name: blue
+  namespace: team-blue
+spec:
+  # parentRef MUST point at a Gateway. The Gateway must permit this
+  # XListenerSet's namespace via `allowedListeners.namespaces.from`.
+  parentRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: shared
+    namespace: platform
+
+  listeners:
+    # Same shape as Gateway.spec.listeners[]. The listener `name`
+    # must be unique across the WHOLE gateway-listener tree (base
+    # Gateway + all attached XListenerSets), otherwise EG flags
+    # Conflicted=True.
+    - name: blue-http
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same        # only routes from team-blue can attach here

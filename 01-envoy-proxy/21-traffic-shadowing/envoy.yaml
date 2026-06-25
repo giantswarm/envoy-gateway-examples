@@ -1,0 +1,90 @@
+# --------------------------------------------------------------------------- #
+# 21 — Traffic shadowing (request mirroring)
+#
+# `request_mirror_policies` on a route tees every matching request to a
+# second cluster, "fire and forget":
+#   - The client gets the response from the PRIMARY only.
+#   - The mirror cluster receives the same request asynchronously; its
+#     response is discarded.
+#   - Errors on the mirror NEVER affect the client.
+#
+# Real use case: deploy a new version of a service in shadow, send it
+# real production traffic, compare logs/metrics, ship when confident.
+#
+# Backends:
+#   primary  (existing helloworld, NAME=primary)
+#   shadow   (a SECOND helloworld with NAME=shadow — fingerprint the
+#             tee in its access logs)
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_0
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_shadow
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: route
+                  virtual_hosts:
+                    - name: hello
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            # Primary upstream — what the client sees.
+                            cluster: primary
+
+                            # Mirror policies — list one or more
+                            # clusters to tee to. Each tee is
+                            # independent (different sampling, etc.).
+                            request_mirror_policies:
+                              - cluster: shadow
+                                # Percent of traffic to mirror.
+                                # Use {numerator: N, denominator: HUNDRED}
+                                # for fine-grained pct, or HUNDRED+100
+                                # for "everything".
+                                runtime_fraction:
+                                  default_value:
+                                    numerator: 100
+                                    denominator: HUNDRED
+                                # `:authority` in the mirrored request
+                                # gets suffixed with "-shadow" by
+                                # default so the upstream can tell.
+                                # Disable with `disable_shadow_host_suffix_append: true`.
+                                trace_sampled: false
+
+  clusters:
+    - name: primary
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: primary
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: primary, port_value: 8080 } }
+
+    - name: shadow
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: shadow
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address: { socket_address: { address: shadow, port_value: 8080 } }

@@ -41,11 +41,11 @@ Build order — later examples reference concepts from earlier ones.
 | 11 | [`11-rate-limiting-global`](./11-rate-limiting-global/) | `envoy.filters.http.ratelimit` + envoyproxy/ratelimit + Redis. Descriptors, actions, wildcards, failure_mode_deny, gRPC cluster setup. |
 | 12 | [`12-jwt-authn`](./12-jwt-authn/)                    | `jwt_authn` filter — providers, rules, `requires_any/_all/_missing`, local vs remote JWKS, claim forwarding via `forward_payload_header` and `claim_to_headers`. Self-minted RSA keys + bash token signer. |
 | 13 | [`13-ext-authz`](./13-ext-authz/)                    | `ext_authz` filter (HTTP variant) talking to a small Flask authz service. Header allow-lists, per-route disable, `failure_mode_allow`. |
-| 14 | `14-lua-filter` *(deferred)*                         | Per-request mutation via Lua — covered conceptually inside example 15. |
+| 14 | [`14-lua-filter`](./14-lua-filter/)                  | Inline `envoy.filters.http.lua` — inject request headers, stamp response headers, log to stdout. |
 | 15 | [`15-wasm-filter`](./15-wasm-filter/)                | Rust proxy-wasm filter built inside Docker (no host Rust toolchain). Adds response headers, short-circuits with 403, logs breadcrumbs. |
-| 16 | `16-cors-and-headers` *(planned)*                    | CORS + header manipulation. |
+| 16 | [`16-cors-and-headers`](./16-cors-and-headers/)      | CORS filter via `typed_per_filter_config` (exact + regex origins) + vhost / route_config / route-level header injection. |
 | 17 | [`17-access-logging`](./17-access-logging/)          | Three sinks side-by-side (stdout text, file JSON, errors-only file), format operators, `status_code_filter`, runtime-tunable threshold. |
-| 18 | `18-tracing-otlp` *(planned)*                        | OTLP → Jaeger. |
-| 19 | `19-grpc-and-grpc-web` *(planned)*                   | gRPC routing + grpc-web bridge. |
-| 20 | `20-websocket` *(planned)*                           | Upgrade handling. |
-| 21 | `21-traffic-shadowing` *(planned)*                   | Mirror to a second backend. |
+| 18 | [`18-tracing-otlp`](./18-tracing-otlp/)              | OpenTelemetry tracer + Jaeger all-in-one (OTLP gRPC; UI at :16686). Custom span tags from request headers. |
+| 19 | [`19-grpc-and-grpc-web`](./19-grpc-and-grpc-web/)    | Two listeners — :10000 grpc-web bridge for browsers, :10001 native HTTP/2 gRPC for service-to-service. `moul/grpcbin` backend. |
+| 20 | [`20-websocket`](./20-websocket/)                    | `upgrade_configs` for the Upgrade dance. `jmalloc/echo-server` backend. Verify uses `websocat`. |
+| 21 | [`21-traffic-shadowing`](./21-traffic-shadowing/)    | `request_mirror_policies` tees traffic to a shadow backend; client unaffected by shadow outages. |

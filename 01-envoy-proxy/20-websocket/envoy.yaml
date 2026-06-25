@@ -1,0 +1,73 @@
+# --------------------------------------------------------------------------- #
+# 20 — WebSocket
+#
+# WebSocket is HTTP/1.1 with an Upgrade dance: client sends
+# "Upgrade: websocket", server replies 101 Switching Protocols, then the
+# socket gets re-purposed for the WebSocket framing protocol.
+#
+# Envoy needs ONE knob to forward this correctly: `upgrade_configs` on
+# the HCM listing every protocol it should allow upgrading to. Without
+# it, Envoy treats the Upgrade header as just a header and the response
+# never gets converted into a stream-level upgrade — the WS handshake
+# stalls.
+#
+# Backend is jmalloc/echo-server — supports plain HTTP, WebSocket
+# (echoes), and `/.ws` endpoint.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_0
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_ws
+
+                # THE knob. Add "websocket" so Envoy passes the 101
+                # upgrade through. You can list multiple protocols
+                # (e.g. "CONNECT" for HTTP/2 CONNECT method, used by
+                # HTTP/3 polyfills + some VPN-over-HTTP schemes).
+                upgrade_configs:
+                  - upgrade_type: websocket
+
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: route
+                  virtual_hosts:
+                    - name: ws
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: echo
+                            # WebSocket streams are long-lived. Default
+                            # idle_timeout is 1h; bump to a comfortable
+                            # value or set 0 (disabled) for stress tests.
+                            idle_timeout: 0s
+
+  clusters:
+    - name: echo
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: echo
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: echo, port_value: 8080 }

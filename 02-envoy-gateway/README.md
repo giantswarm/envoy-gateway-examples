@@ -50,9 +50,9 @@ done with Phase 2: `cd 00-kind-bootstrap && make down`.
 | 17 | `17-envoyextensionpolicy-wasm-lua` *(skipped)*        | Wasm covered in Phase 1 ex 15. |
 | 18 | [`18-envoypatchpolicy`](./18-envoypatchpolicy/)       | Raw xDS escape hatch. Two JSONPatches: listener buffer + route_config response header. Self-heals the EG feature flag. |
 | 19 | [`19-rate-limiting`](./19-rate-limiting/)             | `BTP.rateLimit.type: Local` — 3 buckets (free/premium/catch-all) keyed on `x-tenant`. Verify asserts 200/429 split. Global mode sketched in README. |
-| 20 | `20-httproutefilter` *(planned)*                      | The `HTTPRouteFilter` CR for richer filter chains. |
-| 21 | `21-observability` *(planned)*                        | Access logs, metrics, OTLP traces via `EnvoyProxy` + `Telemetry`. |
-| 22 | `22-listenersets` *(planned)*                         | **Headline new feature.** Base `Gateway` + multiple `XListenerSet`s, merged listener config in `egctl`. |
+| 20 | [`20-httproutefilter`](./20-httproutefilter/)         | EG `HTTPRouteFilter` — capture-group regex rewrite (`/users/(\d+)` → `?user_id=\1`) + inline `directResponse` for `/healthz` (no backend call). |
+| 21 | [`21-observability`](./21-observability/)             | JSON access logs to stdout + Prometheus metrics + OTLP traces to in-cluster OTel Collector (`debug` exporter). All three in one `EnvoyProxy.telemetry` block. |
+| 22 | [`22-listenersets`](./22-listenersets/)              | **Headline feature.** Base Gateway in `platform` ns + 2 XListenerSets in `team-blue`/`team-green` contributing their own listeners. One Envoy data plane, three owners. |
 
 ## The mapping section
 

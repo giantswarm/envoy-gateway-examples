@@ -1,0 +1,20 @@
+services:
+  # moul/grpcbin — small gRPC reference server with reflection.
+  # Exposes hello.HelloService + grpcbin.GRPCBin + reflection.
+  # Pinned to `latest` because the project ships only latest + git-SHA
+  # tags (same caveat as Phase 1 ex 11 / Phase 2 ex 06).
+  grpcbin:
+    image: docker.io/moul/grpcbin:latest
+    expose: ["9000"]
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    ports:
+      - "10000:10000"      # gRPC-Web entry (browser HTTP/1.1)
+      - "10001:10001"      # native HTTP/2 gRPC
+      - "9901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    depends_on:
+      - grpcbin

@@ -1,0 +1,27 @@
+---
+# HTTPRouteFilter — capture-group URL rewrite.
+#
+# Standard HTTPRoute's URLRewrite filter only supports:
+#   - ReplacePrefixMatch  (strip a literal prefix)
+#   - ReplaceFullPath     (replace the whole path with a literal)
+#
+# Both are LITERAL — no regex, no capture groups. So you can't turn
+# `/users/42` into `/echo?user_id=42` with vanilla Gateway API.
+#
+# HTTPRouteFilter's urlRewrite.path.type: ReplaceRegexMatch fills
+# that gap: a Go-RE2 pattern + a substitution string with `\1`,
+# `\2`, etc. backreferences.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: users-rewrite
+  namespace: demo
+spec:
+  urlRewrite:
+    path:
+      type: ReplaceRegexMatch
+      replaceRegexMatch:
+        # ^...$ anchors are recommended — without them, regex engines
+        # can match partial paths and surprise you.
+        pattern: '^/users/([0-9]+)$'
+        substitution: '/echo?user_id=\1'
