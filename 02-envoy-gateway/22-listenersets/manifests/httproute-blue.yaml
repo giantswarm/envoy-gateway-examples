@@ -1,0 +1,25 @@
+---
+# team-blue's route attaches to its own XListenerSet, NOT directly
+# to the base Gateway. The parentRef kind is XListenerSet.
+#
+# Alternative attachment (also valid): parentRef the base Gateway
+# with sectionName=blue-http. Either works; using the XListenerSet
+# directly makes team ownership clearer in the YAML.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: blue
+  namespace: team-blue
+spec:
+  parentRefs:
+    - group: gateway.networking.x-k8s.io
+      kind: XListenerSet
+      name: blue
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: blue-backend
+          port: 80

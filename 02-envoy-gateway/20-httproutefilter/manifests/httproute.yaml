@@ -1,0 +1,51 @@
+---
+# HTTPRoute pointing at the two HTTPRouteFilter CRs via the
+# standard `filters[].type: ExtensionRef` mechanism.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route-filter
+  namespace: demo
+spec:
+  parentRefs:
+    - name: route-filter
+
+  rules:
+    # ---- /users/N -> capture-group rewrite to /echo?user_id=N ----- #
+    - matches:
+        - path:
+            type: RegularExpression
+            value: '^/users/[0-9]+$'
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: users-rewrite
+      backendRefs:
+        - name: helloworld
+          port: 8080
+
+    # ---- /healthz -> direct 200 + JSON body, no upstream call ---- #
+    - matches:
+        - path:
+            type: Exact
+            value: /healthz
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: gateway.envoyproxy.io
+            kind: HTTPRouteFilter
+            name: healthz-direct
+      # backendRefs intentionally omitted — directResponse short-
+      # circuits before any backend call. Gateway API allows this
+      # when filters[] produces the response.
+
+    # ---- catch-all -> helloworld --------------------------------- #
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: helloworld
+          port: 8080

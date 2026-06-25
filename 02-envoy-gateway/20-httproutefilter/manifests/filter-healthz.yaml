@@ -1,0 +1,31 @@
+---
+# HTTPRouteFilter — direct response.
+#
+# Standard HTTPRoute has no equivalent. The closest is
+# RequestRedirect (returns 3xx + Location), but a redirect isn't a
+# response BODY. If you need to return a literal payload (a
+# /healthz probe, a maintenance page, a stub OpenAPI doc) the only
+# vanilla-Gateway-API workaround is to deploy a tiny backend just
+# for that purpose.
+#
+# `directResponse` short-circuits the route — Envoy serves the
+# response directly. No upstream call. backendRefs on the rule are
+# unused (and may be omitted entirely).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: HTTPRouteFilter
+metadata:
+  name: healthz-direct
+  namespace: demo
+spec:
+  directResponse:
+    statusCode: 200
+    contentType: application/json
+    body:
+      # Two body sources:
+      #   type: Inline      — `inline:` field carries the body string
+      #   type: ValueRef    — `valueRef:` points at a ConfigMap key,
+      #                       useful for large payloads (e.g. a 5 KB
+      #                       OpenAPI spec)
+      type: Inline
+      inline: |
+        {"status":"ok","served_by":"envoy-gateway","path":"/healthz"}

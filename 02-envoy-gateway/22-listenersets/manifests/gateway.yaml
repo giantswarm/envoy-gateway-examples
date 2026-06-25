@@ -1,0 +1,31 @@
+---
+# Base Gateway, owned by the platform team. Single entry listener
+# on :80 — the cluster admin's responsibility. Other teams attach
+# their own listeners via XListenerSet, without needing write
+# access to this Gateway.
+#
+# `allowedListeners.namespaces.from: All` permits XListenerSets
+# from anywhere in the cluster to attach. Mirror of
+# `allowedRoutes.namespaces.from` but for listeners.
+# (Requires Gateway API v1.3+; the bootstrap installs that.)
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared
+  namespace: platform
+spec:
+  gatewayClassName: eg
+
+  allowedListeners:
+    namespaces:
+      from: All
+      # Or `Selector` + a labelSelector to restrict to specific
+      # tenant namespaces.
+
+  listeners:
+    - name: base
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All           # routes from any ns can attach to the BASE listener

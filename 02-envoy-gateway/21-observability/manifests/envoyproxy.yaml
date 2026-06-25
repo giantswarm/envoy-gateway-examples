@@ -1,0 +1,86 @@
+---
+# Per-Gateway EnvoyProxy with telemetry knobs wired up.
+#
+# Important: this REPLACES the GatewayClass default-envoyproxy for
+# this Gateway only (full-replace semantics, see ex 04). We have to
+# restate `envoyService.type: ClusterIP` or the data plane Service
+# defaults to LoadBalancer → stays <pending> on kind → Gateway
+# never reaches Programmed=True.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: observed-proxy
+  namespace: demo
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP                  # restated (NOT inherited)
+
+  # ------------------------------------------------------------------ #
+  # 1. Access logs — JSON to stdout (visible via `kubectl logs`)
+  # ------------------------------------------------------------------ #
+  telemetry:
+    accessLog:
+      settings:
+        - format:
+            type: JSON
+            # `json:` is a string-to-string map. Values are Envoy
+            # log substitution strings. See:
+            # https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log/usage
+            json:
+              start_time: "%START_TIME%"
+              method: "%REQ(:METHOD)%"
+              path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+              protocol: "%PROTOCOL%"
+              status: "%RESPONSE_CODE%"
+              duration_ms: "%DURATION%"
+              bytes_sent: "%BYTES_SENT%"
+              upstream: "%UPSTREAM_HOST%"
+              x_forwarded_for: "%REQ(X-FORWARDED-FOR)%"
+              user_agent: "%REQ(USER-AGENT)%"
+              request_id: "%REQ(X-REQUEST-ID)%"
+              authority: "%REQ(:AUTHORITY)%"
+              upstream_cluster: "%UPSTREAM_CLUSTER%"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+
+    # ------------------------------------------------------------------ #
+    # 2. Metrics — Prometheus is enabled by default on the admin
+    #    interface (:19000/stats/prometheus). EnvoyProxy.telemetry.
+    #    metrics exposes scraping config (annotations etc.).
+    # ------------------------------------------------------------------ #
+    metrics:
+      prometheus:
+        disable: false             # default; show the knob exists
+      # ServiceMonitor for Prometheus Operator users:
+      # matches:
+      #   - type: Counter
+      #     name: envoy_http_downstream_rq_total
+
+    # ------------------------------------------------------------------ #
+    # 3. Tracing — send OTLP traces to the OTel Collector.
+    # ------------------------------------------------------------------ #
+    tracing:
+      samplingRate: 100            # 0-100 (percentage). 100 = trace
+                                   # everything. In prod, 1-10.
+      provider:
+        type: OpenTelemetry
+        backendRefs:
+          - name: otel-collector
+            namespace: demo
+            port: 4317             # OTLP gRPC
+      # Custom span tags injected by Envoy.
+      customTags:
+        env:
+          type: Literal
+          literal:
+            value: tutorial
+        pod_name:
+          type: Environment
+          environment:
+            name: ENVOY_POD_NAME
+            defaultValue: unknown

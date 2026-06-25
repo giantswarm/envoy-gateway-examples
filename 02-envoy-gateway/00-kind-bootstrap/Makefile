@@ -5,8 +5,14 @@
 
 CLUSTER          := envoy-gateway-examples
 HELLOWORLD_IMAGE := envoy-gateway-examples/helloworld:tutorial
-GATEWAY_API_VER  := v1.2.0
-EG_HELM_VERSION  := v1.4.0
+# Gateway API v1.3+ adds Gateway.spec.allowedListeners (XListenerSet
+# admission gate — see ex 22). v1.2 is the floor (XListenerSet first
+# shipped there).
+GATEWAY_API_VER  := v1.3.0
+# EG v1.5+ is required to actually translate XListenerSets into Envoy
+# listeners (v1.4 has the Gateway API CRDs but ignores the resource).
+# Bump to a newer stable if available.
+EG_HELM_VERSION  := v1.5.0
 REPO_ROOT        := $(shell git rev-parse --show-toplevel)
 
 # Explicit list of Gateway API CRD short names — deleted by full FQN

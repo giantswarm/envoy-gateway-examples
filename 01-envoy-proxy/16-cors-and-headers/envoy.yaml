@@ -1,0 +1,97 @@
+# --------------------------------------------------------------------------- #
+# 16 — CORS + header manipulation
+#
+# Two features combined:
+#   - envoy.filters.http.cors handles preflight OPTIONS requests
+#     directly (short-circuits before the router), and stamps the
+#     allow-origin headers on normal responses.
+#   - virtual_host- and route-level request_headers_to_add /
+#     response_headers_to_add inject headers without touching code.
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    - name: listener_0
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                http_filters:
+                  # CORS filter — order matters. It MUST be before the
+                  # router so OPTIONS preflights short-circuit cleanly.
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: route
+                  # Virtual-host-level header injection — applies to
+                  # every response served on this vhost.
+                  response_headers_to_add:
+                    - header: { key: x-frame-options,        value: DENY }
+                    - header: { key: x-content-type-options, value: nosniff }
+                    - header: { key: strict-transport-security, value: "max-age=31536000" }
+                    - header: { key: referrer-policy, value: no-referrer }
+
+                  request_headers_to_add:
+                    - header: { key: x-tutorial-step, value: "16" }
+
+                  virtual_hosts:
+                    - name: hello
+                      domains: ["*"]
+                      # Per-vhost CORS policy via typed_per_filter_config —
+                      # the modern shape (the older inline `cors:` block
+                      # is deprecated in favor of this).
+                      typed_per_filter_config:
+                        envoy.filters.http.cors:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.CorsPolicy
+                          allow_origin_string_match:
+                            # Exact match
+                            - exact: https://app.example.com
+                            # Or use safe_regex for wildcard subdomain:
+                            - safe_regex:
+                                regex: '^https://[a-z0-9-]+\.partners\.example\.com$'
+                          allow_methods: "GET, POST, OPTIONS"
+                          allow_headers: "authorization, content-type, x-custom-header"
+                          expose_headers: "x-response-time"
+                          max_age: "3600"
+                          allow_credentials: true
+
+                      routes:
+                        - match: { prefix: "/admin" }
+                          route: { cluster: hello }
+                          # Per-route response header override — admin
+                          # paths force no-cache on top of the vhost-
+                          # level security headers.
+                          response_headers_to_add:
+                            - header: { key: cache-control, value: "no-store, no-cache, must-revalidate" }
+
+                        - match: { prefix: "/" }
+                          route: { cluster: hello }
+
+  clusters:
+    - name: hello
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: hello
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: hello, port_value: 8080 }

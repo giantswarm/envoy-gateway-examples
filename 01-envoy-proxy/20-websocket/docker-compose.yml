@@ -1,0 +1,19 @@
+services:
+  # jmalloc/echo-server speaks plain HTTP on /.* AND WebSocket on /.ws
+  # (echoes received frames back). Small (~10MB) and pinned.
+  echo:
+    image: docker.io/jmalloc/echo-server:0.3.6
+    environment:
+      PORT: "8080"
+    expose: ["8080"]
+
+  envoy:
+    image: envoyproxy/envoy:v1.34.1
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    depends_on:
+      - echo

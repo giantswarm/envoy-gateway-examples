@@ -1,0 +1,125 @@
+# --------------------------------------------------------------------------- #
+# 19 — gRPC routing + gRPC-Web bridge
+#
+# Two listeners:
+#   :10000  plaintext gRPC + gRPC-Web — what browser JS clients hit. The
+#           grpc_web filter translates the HTTP/1.1 framing browsers use
+#           into proper HTTP/2 gRPC before forwarding upstream.
+#   :10001  raw HTTP/2 gRPC pass-through — what server-to-server clients
+#           hit. No translation, just an HTTP/2 cluster upstream.
+#
+# Backend: moul/grpcbin (the same gRPC reference server used in
+# 02-envoy-gateway/06-grpcroute).
+# --------------------------------------------------------------------------- #
+
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+
+static_resources:
+  listeners:
+    # ----- :10000 — HTTP/1.1 browser entry with grpc_web filter ------- #
+    - name: listener_grpc_web
+      address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_grpcweb
+                # gRPC-Web is HTTP/1.1 from the browser; we still need
+                # HTTP/2 to the upstream. The grpc_web filter handles
+                # the protocol translation in both directions.
+                codec_type: AUTO
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                http_filters:
+                  # CORS is usually paired with grpc_web (browser apps
+                  # always need it).
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+
+                  # The translator. Order matters: must run BEFORE the
+                  # router so the upstream sees HTTP/2 gRPC.
+                  - name: envoy.filters.http.grpc_web
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+                route_config:
+                  name: grpcweb
+                  virtual_hosts:
+                    - name: grpc_browser
+                      domains: ["*"]
+                      # Allow any origin for the demo. In production
+                      # list specific origins (see ex 16).
+                      typed_per_filter_config:
+                        envoy.filters.http.cors:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.CorsPolicy
+                          allow_origin_string_match:
+                            - safe_regex: { regex: ".*" }
+                          allow_methods: "GET, POST, OPTIONS"
+                          allow_headers: "content-type, x-grpc-web, x-user-agent, grpc-timeout"
+                          expose_headers: "grpc-status, grpc-message"
+                          max_age: "1728000"
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: grpcbin }
+
+    # ----- :10001 — raw HTTP/2 gRPC for server-to-server clients ----- #
+    - name: listener_grpc_native
+      address: { socket_address: { address: 0.0.0.0, port_value: 10001 } }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_grpc
+                # codec_type: HTTP2 forces HTTP/2 on the downstream
+                # connection — required for native gRPC.
+                codec_type: HTTP2
+                # NB: when we say HTTP/2 here, we ALSO need to enable
+                # h2c (HTTP/2 cleartext, no TLS) by setting
+                # http2_protocol_options at the connection manager
+                # level. Default does this.
+                http2_protocol_options: {}
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                route_config:
+                  name: grpc_native
+                  virtual_hosts:
+                    - name: grpc_native
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: grpcbin }
+
+  clusters:
+    - name: grpcbin
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      # The upstream speaks HTTP/2 gRPC. Tell Envoy.
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: grpcbin
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: grpcbin, port_value: 9000 }
