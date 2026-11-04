@@ -11,4 +11,4 @@ Proxy** and **Envoy Gateway**, aimed at Giant Swarm customers.
 - **Phase 3 — `03-debugging/`:** Reference recipes for common failure modes.
 
 See [`PLAN.md`](./PLAN.md) for the full example list, conventions, and
-build order. Examples are not yet implemented — the plan lands first.
+build order. Phases 1 and 2 are ready to run. Phase 3 isn't written yet.
