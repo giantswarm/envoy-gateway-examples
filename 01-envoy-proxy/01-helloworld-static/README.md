@@ -13,10 +13,9 @@ backend. By the end of this example you should be able to answer:
 - Docker and `docker compose`
 - `curl` and `jq`
 
-Versions pinned in this example:
-
-- Envoy: `envoyproxy/envoy:v1.34.1`
-- Python: `python:3.12-slim` (for the helloworld app)
+The Envoy version is pinned in [`docker-compose.yml`](./docker-compose.yml),
+and the Python version for the helloworld app in
+[`apps/helloworld/Dockerfile`](../../apps/helloworld/Dockerfile).
 
 ## What we're building
 
